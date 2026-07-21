@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-registryd
+  labels:
+    app.kubernetes.io/name: registryd
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registryd
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registryd
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      volumes:
+        - name: config
+          emptyDir: {}
+      # Render REGISTRYD_* env -> /etc/registryd/config.yml before the daemon starts.
+      initContainers:
+        - name: bootstrap
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/registryd-bootstrap", "-output", "/etc/registryd/config.yml"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret | default (printf "%s-registryd" .Release.Name) }}
+          env: {{ include "registryd.env" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/registryd
+      containers:
+        - name: registryd
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-cfg-file", "/etc/registryd/config.yml"]
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret | default (printf "%s-registryd" .Release.Name) }}
+          env: {{ include "registryd.env" . | nindent 12 }}
+          ports:
+            - name: api
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8081
+          # /healthz is a dedicated 200 route. It must not be "/" — that now
+          # serves the console, so a probe there would pass on a cached bundle
+          # even if the API were failing.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: api
+            initialDelaySeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/registryd
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

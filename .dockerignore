@@ -1,0 +1,8 @@
+bin/
+.git/
+.env
+synced-frameworks/
+*.md
+!README.md
+node_modules/
+apps/registry/dist/

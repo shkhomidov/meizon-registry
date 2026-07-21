@@ -1,0 +1,183 @@
+// Copyright (c) 2026 Meizon Inc.
+//
+// Permission to use, copy, modify, and/or distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+// PERFORMANCE OF THIS SOFTWARE.
+
+package registry
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"go.gearno.de/kit/pg"
+	"go.meizon.cloud/registry/pkg/coredata"
+	"go.meizon.cloud/registry/pkg/gid"
+)
+
+// jobStore mirrors an in-memory job to the database.
+//
+// Writes are best-effort and never block the pipeline: losing a progress tick
+// is cosmetic, whereas failing a 106-page OCR because a status row could not be
+// written would be absurd. The terminal transition matters more than the ticks,
+// and is the one worth reading back.
+type jobStore struct {
+	svc *Service
+}
+
+// JobView is one run on the jobs page.
+type JobView struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	Status       string    `json:"status"`
+	Step         string    `json:"step,omitempty"`
+	Current      int       `json:"current"`
+	Total        int       `json:"total"`
+	Label        string    `json:"label,omitempty"`
+	FrameworkRef string    `json:"frameworkRef,omitempty"`
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// start records a job as running.
+func (s *Service) startJobRecord(ctx context.Context, jobID, kind, label, frameworkRef string, actorID gid.GID) {
+	id, err := gid.ParseGID(jobID)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	row := coredata.IngestJob{
+		ID: id, Kind: kind, Status: coredata.JobStatusRunning,
+		Label: label, FrameworkRef: frameworkRef,
+		ActorID: actorID.String(), CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		return row.Insert(ctx, tx, s.platformScope())
+	}); err != nil {
+		s.logger.WarnCtx(ctx, "cannot record job start: "+err.Error())
+	}
+}
+
+func (st *jobStore) progress(jobID, step string, current, total int) {
+	id, err := gid.ParseGID(jobID)
+	if err != nil {
+		return
+	}
+	ctx := context.Background()
+	_ = st.svc.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		return (coredata.IngestJob{}).UpdateProgress(ctx, conn, st.svc.platformScope(), id, step, current, total)
+	})
+}
+
+func (st *jobStore) finish(jobID, status string, res *GeneratedFramework, diff map[string]string, baseline, errText string) {
+	id, err := gid.ParseGID(jobID)
+	if err != nil {
+		return
+	}
+
+	// The whole proposal is stored, not just a summary: it is what the reviewer
+	// comes back to, and re-running the pipeline to recover it would cost
+	// another OCR pass and every LLM call.
+	var payload []byte
+	if res != nil {
+		if b, merr := json.Marshal(IngestStatus{
+			Status: status, Result: res, Diff: diff, Baseline: baseline,
+		}); merr == nil {
+			payload = b
+		}
+	}
+
+	ctx := context.Background()
+	if err := st.svc.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		return (coredata.IngestJob{}).Finish(ctx, conn, st.svc.platformScope(), id, status, payload, errText)
+	}); err != nil {
+		st.svc.logger.WarnCtx(ctx, "cannot record job completion: "+err.Error())
+	}
+}
+
+// JobList returns recent runs for the status page.
+func (s *Service) JobList(ctx context.Context, limit int) ([]JobView, error) {
+	out := []JobView{}
+	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		var jobs coredata.IngestJobs
+		if err := jobs.LoadRecent(ctx, conn, s.platformScope(), limit); err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			out = append(out, JobView{
+				ID: j.ID.String(), Kind: j.Kind, Status: j.Status, Step: j.Step,
+				Current: j.Current, Total: j.Total, Label: j.Label,
+				FrameworkRef: j.FrameworkRef, Error: j.Error,
+				CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
+			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// jobStatusFromStore reconstructs a job's status from the database, for a job
+// this process does not hold in memory — a different tab, or after a restart.
+func (s *Service) jobStatusFromStore(ctx context.Context, jobID string) (IngestStatus, error) {
+	id, err := gid.ParseGID(jobID)
+	if err != nil {
+		return IngestStatus{}, coredata.ErrResourceNotFound
+	}
+
+	var out IngestStatus
+	err = s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		scope := s.platformScope()
+
+		var row coredata.IngestJob
+		if err := row.LoadByID(ctx, conn, scope, id); err != nil {
+			return err
+		}
+		out = IngestStatus{
+			Status:   row.Status,
+			Step:     row.Step,
+			Progress: IngestProgress{Current: row.Current, Total: row.Total},
+			Error:    row.Error,
+		}
+		if row.Status != coredata.JobStatusDone {
+			return nil
+		}
+		payload, err := (coredata.IngestJob{}).Result(ctx, conn, scope, id)
+		if err != nil || len(payload) == 0 {
+			return nil // the run finished but its document was not stored
+		}
+		var stored IngestStatus
+		if err := json.Unmarshal(payload, &stored); err == nil {
+			stored.Status = row.Status
+			out = stored
+		}
+		return nil
+	})
+	return out, err
+}
+
+// FailOrphanedJobs marks runs still flagged "running" from a previous process.
+// Called at startup: a job whose goroutine died with the process will never
+// finish, and showing it as in-progress makes a user wait for nothing.
+func (s *Service) FailOrphanedJobs(ctx context.Context) {
+	err := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		n, err := (coredata.IngestJob{}).FailOrphaned(ctx, tx, s.platformScope(),
+			"the server restarted while this job was running")
+		if err == nil && n > 0 {
+			s.logger.InfoCtx(ctx, "marked interrupted jobs as failed")
+		}
+		return err
+	})
+	if err != nil {
+		s.logger.WarnCtx(ctx, "cannot reconcile interrupted jobs: "+err.Error())
+	}
+}

@@ -1,0 +1,43 @@
+# Default values for registryd.
+
+image:
+  repository: meizon-registryd
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  apiPort: 8080
+  metricsPort: 8081
+
+config:
+  baseURL: https://registry.example.com
+  superAdmins: "" # comma-separated allowlist of superadmin emails
+  api:
+    rateLimitRpm: 600
+    rateLimitBurst: 60
+
+postgres:
+  addr: registryd-postgres:5432
+  username: registryd
+  database: registryd
+
+# Secrets. Provide these via `--set-string` or a pre-created Secret referenced by
+# existingSecret. NEVER commit real values. Required: encryptionKey (base64 of 32
+# bytes), passwordPepper (>= 32 bytes), pgPassword. Optional: adminToken.
+secrets:
+  existingSecret: ""     # if set, all secret keys are read from this Secret
+  encryptionKey: ""
+  passwordPepper: ""
+  pgPassword: ""
+  adminToken: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi

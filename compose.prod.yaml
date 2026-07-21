@@ -1,0 +1,60 @@
+# Copyright (c) 2026 Meizon Inc.
+#
+# Minimum production footprint: registryd + PostgreSQL. A one-shot bootstrap
+# service renders REGISTRYD_* env into a config file on a shared volume; the
+# daemon then loads it. Front this with an HTTPS reverse proxy in production and
+# supply secrets from your secret manager rather than inline env.
+
+name: meizon-registry
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: registryd
+      POSTGRES_PASSWORD: ${REGISTRYD_PG_PASSWORD:-registryd}
+      POSTGRES_DB: registryd
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U registryd"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: render REGISTRYD_* env -> /etc/registryd/config.yml on the shared volume.
+  bootstrap:
+    build: .
+    image: meizon-registryd:latest
+    entrypoint: ["/usr/local/bin/registryd-bootstrap", "-output", "/etc/registryd/config.yml"]
+    environment: &registryd-env
+      REGISTRYD_ENCRYPTION_KEY: ${REGISTRYD_ENCRYPTION_KEY:?set REGISTRYD_ENCRYPTION_KEY}
+      REGISTRYD_AUTH_PASSWORD_PEPPER: ${REGISTRYD_AUTH_PASSWORD_PEPPER:?set REGISTRYD_AUTH_PASSWORD_PEPPER}
+      REGISTRYD_SUPER_ADMINS: ${REGISTRYD_SUPER_ADMINS:-}
+      REGISTRYD_ADMIN_TOKEN: ${REGISTRYD_ADMIN_TOKEN:-}
+      REGISTRYD_PG_ADDR: postgres:5432
+      REGISTRYD_PG_PASSWORD: ${REGISTRYD_PG_PASSWORD:-registryd}
+      REGISTRYD_API_ADDR: 0.0.0.0:8080
+      REGISTRYD_METRICS_ADDR: 0.0.0.0:8081
+    volumes:
+      - config:/etc/registryd
+
+  registryd:
+    build: .
+    image: meizon-registryd:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    command: ["-cfg-file", "/etc/registryd/config.yml"]
+    environment: *registryd-env
+    volumes:
+      - config:/etc/registryd
+    ports:
+      - "8080:8080" # API (front with HTTPS in production)
+      - "8081:8081" # metrics
+
+volumes:
+  pgdata:
+  config:

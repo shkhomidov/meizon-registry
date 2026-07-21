@@ -1,0 +1,145 @@
+// Copyright (c) 2026 Meizon Inc.
+//
+// Permission to use, copy, modify, and/or distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+// REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+// AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+// INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+// LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+// OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+// PERFORMANCE OF THIS SOFTWARE.
+
+package gid
+
+import (
+	"crypto/rand"
+	"database/sql/driver"
+	"encoding/base64"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+// TenantID represents a tenant identifier (64 bits/8 bytes total).
+type TenantID [8]byte
+
+var (
+	// NilTenant represents an empty tenant ID.
+	NilTenant = TenantID{}
+
+	defaultTenantGenerator = newTenantGenerator()
+)
+
+type tenantGenerator struct {
+	machineID [3]byte // 24 bits for machine identifier
+	counter   uint32
+}
+
+// NewTenantID generates a new globally unique tenant ID.
+func NewTenantID() TenantID {
+	return defaultTenantGenerator.NewTenantID()
+}
+
+func newTenantGenerator() *tenantGenerator {
+	g := &tenantGenerator{counter: 0}
+
+	if _, err := rand.Read(g.machineID[:]); err != nil {
+		hostname, _ := os.Hostname()
+		copy(g.machineID[:], []byte(hostname))
+
+		if len(hostname) < len(g.machineID) {
+			ts := time.Now().UnixNano()
+			binary.BigEndian.PutUint16(g.machineID[len(hostname):], uint16(ts))
+		}
+	}
+
+	return g
+}
+
+// NewTenantID generates a new 64-bit tenant ID with the structure:
+//   - 24 bits: Machine ID (random, unique per machine)
+//   - 24 bits: Timestamp (truncated Unix time in seconds)
+//   - 16 bits: Counter (increments per ID)
+func (g *tenantGenerator) NewTenantID() TenantID {
+	var id TenantID
+
+	copy(id[0:3], g.machineID[:])
+
+	now := uint32(time.Now().Unix())
+	id[3] = byte(now >> 16)
+	id[4] = byte(now >> 8)
+	id[5] = byte(now)
+
+	count := atomic.AddUint32(&g.counter, 1) & 0xFFFF
+	binary.BigEndian.PutUint16(id[6:8], uint16(count))
+
+	return id
+}
+
+// Value implements the database/sql/driver.Valuer interface.
+func (id TenantID) Value() (driver.Value, error) {
+	return id.String(), nil
+}
+
+// Scan implements the database/sql.Scanner interface.
+func (id *TenantID) Scan(value any) error {
+	switch v := value.(type) {
+	case string:
+		decoded, err := base64.RawURLEncoding.DecodeString(v)
+		if err != nil {
+			return err
+		}
+
+		if len(decoded) != len(*id) {
+			return fmt.Errorf("invalid tenant ID length: got %d, want %d", len(decoded), len(*id))
+		}
+
+		copy((*id)[:], decoded)
+
+		return nil
+	default:
+		return fmt.Errorf("invalid type for TenantID: expected string, got %T", value)
+	}
+}
+
+// String returns the base64url representation of the TenantID.
+func (id TenantID) String() string {
+	return base64.RawURLEncoding.EncodeToString(id[:])
+}
+
+// MarshalText returns the base64url representation for text encoding.
+func (id TenantID) MarshalText() ([]byte, error) {
+	return []byte(base64.RawURLEncoding.EncodeToString(id[:])), nil
+}
+
+// UnmarshalText parses the base64url representation for text decoding.
+func (id *TenantID) UnmarshalText(text []byte) error {
+	decoded, err := base64.RawURLEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+
+	if len(decoded) != len(*id) {
+		return fmt.Errorf("invalid tenant ID length: got %d, want %d", len(decoded), len(*id))
+	}
+
+	copy((*id)[:], decoded)
+
+	return nil
+}
+
+// IsValid returns true if the tenant ID is not nil.
+func (id TenantID) IsValid() bool {
+	return id != NilTenant
+}
+
+// Timestamp extracts the timestamp from the TenantID.
+func (id TenantID) Timestamp() time.Time {
+	seconds := uint32(id[3])<<16 | uint32(id[4])<<8 | uint32(id[5])
+	return time.Unix(int64(seconds), 0)
+}

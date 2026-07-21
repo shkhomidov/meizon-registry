@@ -1,0 +1,18 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Barlos mark">
+  <!-- Standalone copy used as the favicon, so it cannot inherit the app's
+       theme token. The media query keeps it legible in both browser themes:
+       the bright brand green would nearly vanish on a light tab strip. -->
+  <style>
+    .mark { stroke: #1A7F4B; }
+    .mark-fill { fill: #1A7F4B; }
+    @media (prefers-color-scheme: dark) {
+      .mark { stroke: #3DD68C; }
+      .mark-fill { fill: #3DD68C; }
+    }
+  </style>
+  <circle class="mark" cx="50" cy="31" r="25" stroke-width="2.5" opacity="0.28"/>
+  <circle class="mark" cx="50" cy="31" r="15.5" stroke-width="5.5"/>
+  <circle class="mark" cx="28" cy="69" r="15.5" stroke-width="5.5"/>
+  <circle class="mark" cx="72" cy="69" r="15.5" stroke-width="5.5"/>
+  <rect class="mark-fill" x="44.7" y="51.7" width="10.6" height="10.6" rx="1.4" transform="rotate(45 50 57)"/>
+</svg>
