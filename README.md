@@ -145,8 +145,8 @@ Refactor the console/connect API to gqlgen GraphQL (currently REST+JSON); expand
 the console (invites, admin: users/roles/keys/tokens, versions timeline, download
 bundle/seed buttons); wire the reference consumer (`pkg/distclient`) into the
 actual `probo` GRC as a background sync worker + "Import framework bundle" screen
-+ `framework_sources` migration (kept out of `probo` by decision); OAuth2/SSO; AWS
++ `framework_sources` migration (kept out of `meizon` by decision); OAuth2/SSO; AWS
 Secrets Manager / SSM secret refs (only `file://` + inline today).
 
-See `docs/FRAMEWORK-REGISTRY-SPEC.md` (in the sibling `probo` repo) for the full
+See `docs/FRAMEWORK-REGISTRY-SPEC.md` (in the sibling `meizon` repo) for the full
 specification.
