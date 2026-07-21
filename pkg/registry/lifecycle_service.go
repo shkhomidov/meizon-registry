@@ -27,9 +27,30 @@ import (
 	"go.meizon.cloud/registry/pkg/iam"
 )
 
-// ErrSeparationOfDuties is returned when the sole author of a version attempts
-// to approve it.
-var ErrSeparationOfDuties = errors.New("separation of duties: the author cannot approve their own version")
+// ErrSeparationOfDuties is returned when the author of a version attempts to
+// approve or publish it themselves.
+//
+// Publish is gated on the author, not on the approver: requiring a third
+// identity to release would deadlock a two-person registry (one auditor, one
+// moderator), which is the common deployment. The invariant that matters is
+// that nobody ships their own work unreviewed.
+var ErrSeparationOfDuties = errors.New("separation of duties: the author cannot approve or publish their own version")
+
+// emitDistributionEvent appends to the consumer-facing change feed inside the
+// caller's transaction, so an event can never describe a state change that was
+// rolled back — nor a publication go out without an event to announce it.
+func (s *Service) emitDistributionEvent(ctx context.Context, tx pg.Tx, kind string, framework coredata.Framework, version coredata.FrameworkVersion, at time.Time) error {
+	ev := coredata.DistributionEvent{
+		Kind:         kind,
+		FrameworkRef: framework.ReferenceID,
+		Version:      version.Version,
+		ContentHash:  version.ContentHash,
+		Region:       framework.Region,
+		Public:       framework.Public,
+		CreatedAt:    at,
+	}
+	return ev.Append(ctx, tx, framework.ID.TenantID())
+}
 
 // Submit locks a DRAFT for review (DRAFT → IN_REVIEW). The draft must contain at
 // least one control and pass schema validation.
@@ -112,8 +133,13 @@ func (s *Service) Approve(ctx context.Context, actorID, versionID gid.GID, comme
 		}
 
 		if approved >= version.Quorum {
+			approvedAt := time.Now()
 			version.Status = coredata.FrameworkVersionStatusApproved
-			version.UpdatedAt = time.Now()
+			// Record the reviewer whose vote met quorum. With a quorum above 1
+			// this is the last approver; the full roll call stays in `approvals`.
+			version.ApprovedBy = actorID.String()
+			version.ApprovedAt = &approvedAt
+			version.UpdatedAt = approvedAt
 			if err := version.Update(ctx, tx, scope); err != nil {
 				return err
 			}
@@ -182,9 +208,18 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 			return fmt.Errorf("%w: can only publish an APPROVED version (current: %s)", ErrInvalidTransition, version.Status)
 		}
 
+		// Separation of duties, same rule as Approve: publishing is the act that
+		// makes a version real to every consuming GRC, so the author must not be
+		// the one to perform it. Without this, an author holding the moderator
+		// role could get a colleague's approval and then ship it themselves.
+		if actorID == version.AuthorID {
+			return ErrSeparationOfDuties
+		}
+
 		publishedAt := time.Now()
 		version.Status = coredata.FrameworkVersionStatusPublished
 		version.PublishedAt = &publishedAt
+		version.PublishedBy = actorID.String()
 
 		bundle, err := s.assembleBundle(ctx, tx, scope, framework, version)
 		if err != nil {
@@ -237,6 +272,13 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 			}
 		}
 
+		// Announce to consumers. Emitted after framework.Public is settled from
+		// the license, because the event carries the visibility that decides who
+		// is allowed to see it.
+		if err := s.emitDistributionEvent(ctx, tx, coredata.DistributionEventPublished, framework, version, publishedAt); err != nil {
+			return err
+		}
+
 		return s.recordAudit(ctx, tx, scope, actorID, "version.publish", version.ID.String(),
 			fmt.Sprintf("%s@%s hash=%s", framework.ReferenceID, version.Version, version.ContentHash))
 	})
@@ -259,9 +301,17 @@ func (s *Service) Deprecate(ctx context.Context, actorID, versionID gid.GID) err
 			return fmt.Errorf("%w: can only deprecate a PUBLISHED version (current: %s)", ErrInvalidTransition, version.Status)
 		}
 
+		deprecatedAt := time.Now()
 		version.Status = coredata.FrameworkVersionStatusDeprecated
-		version.UpdatedAt = time.Now()
+		version.UpdatedAt = deprecatedAt
 		if err := version.Update(ctx, tx, scope); err != nil {
+			return err
+		}
+
+		// The retirement signal. A consumer that already imported this version
+		// has no other way to learn it was withdrawn — the catalog simply stops
+		// listing it, which is indistinguishable from a network hiccup.
+		if err := s.emitDistributionEvent(ctx, tx, coredata.DistributionEventDeprecated, framework, version, deprecatedAt); err != nil {
 			return err
 		}
 

@@ -32,6 +32,8 @@ export const api = {
   submit: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/submit`, { method: 'POST' }),
   approve: (ref, comment) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/approve`, { method: 'POST', body: { comment } }),
   publish: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/publish`, { method: 'POST' }),
+  reject: (ref, comment) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/reject`, { method: 'POST', body: { comment } }),
+  deprecate: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/deprecate`, { method: 'POST' }),
   audit: () => request('/console/v1/audit'),
   // Downloads the framework as a flat meizon-framework/v2 file. Goes through
   // fetch (not a bare link) so the session cookie and error handling apply.

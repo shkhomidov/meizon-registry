@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Send, Check, UploadCloud, ListChecks, History, Info, GitBranch, Download } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Archive, UploadCloud, ListChecks, History, Info, GitBranch, Download } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { useSession, canApprove, canAuthor } from '../context/SessionContext.jsx'
 import StructureTree from '../components/StructureTree.jsx'
@@ -70,7 +70,25 @@ export default function FrameworkDetail() {
       {canAuthor(viewer) && <Button variant="ghost" icon={GitBranch} onClick={() => navigate(`/frameworks/${ref}/new-version`)}>New version from document</Button>}
       {draft && canAuthor(viewer) && <Button variant="ghost" icon={Send} onClick={() => act(() => api.submit(ref))}>Submit for review</Button>}
       {status === 'IN_REVIEW' && canApprove(viewer) && <Button icon={Check} onClick={() => act(() => api.approve(ref, 'approved via console'))}>Approve</Button>}
+      {/* A reviewer needs a way to say no. Without it the only options were
+          approve or leave the submission in limbo indefinitely. */}
+      {status === 'IN_REVIEW' && canApprove(viewer) && (
+        <Button variant="ghost" icon={X} onClick={() => {
+          const why = window.prompt('Why is this being sent back? The author sees this comment.')
+          if (why !== null) act(() => api.reject(ref, why))
+        }}>Reject</Button>
+      )}
       {status === 'APPROVED' && canApprove(viewer) && <Button icon={UploadCloud} onClick={() => act(() => api.publish(ref))}>Publish &amp; sign</Button>}
+      {/* Deprecation is the only signal that reaches a GRC which already
+          imported this version — the catalog going quiet looks identical to a
+          network failure from the consumer's side. */}
+      {status === 'PUBLISHED' && canApprove(viewer) && (
+        <Button variant="ghost" icon={Archive} onClick={() => {
+          if (window.confirm('Deprecate this published version? Consuming GRC instances are told to stop using it.')) {
+            act(() => api.deprecate(ref))
+          }
+        }}>Deprecate</Button>
+      )}
     </div>
   )
 

@@ -42,14 +42,20 @@ type (
 		Quorum      int                    `db:"quorum"`
 		AuthorID    gid.GID                `db:"author_id"`
 		PublishedAt *time.Time             `db:"published_at"`
-		CreatedAt   time.Time              `db:"created_at"`
-		UpdatedAt   time.Time              `db:"updated_at"`
+		// Release provenance. Stored as strings rather than gid.GID because a
+		// version published before these columns existed has no recoverable
+		// publisher — empty means "not known", which a zero GID cannot express.
+		PublishedBy string     `db:"published_by"`
+		ApprovedBy  string     `db:"approved_by"`
+		ApprovedAt  *time.Time `db:"approved_at"`
+		CreatedAt   time.Time  `db:"created_at"`
+		UpdatedAt   time.Time  `db:"updated_at"`
 	}
 
 	FrameworkVersions []*FrameworkVersion
 )
 
-const frameworkVersionColumns = `id, framework_id, version, status, content_hash, signature, key_id, changelog, quorum, author_id, published_at, created_at, updated_at`
+const frameworkVersionColumns = `id, framework_id, version, status, content_hash, signature, key_id, changelog, quorum, author_id, published_at, published_by, approved_by, approved_at, created_at, updated_at`
 
 func (v FrameworkVersion) Insert(ctx context.Context, conn pg.Tx, scope Scoper) error {
 	q := `
@@ -127,7 +133,9 @@ func (v *FrameworkVersion) Update(ctx context.Context, conn pg.Tx, scope Scoper)
 	q := fmt.Sprintf(`
 UPDATE framework_versions
 SET status = @status, content_hash = @content_hash, signature = @signature, key_id = @key_id,
-    changelog = @changelog, quorum = @quorum, published_at = @published_at, updated_at = @updated_at
+    changelog = @changelog, quorum = @quorum, published_at = @published_at,
+    published_by = @published_by, approved_by = @approved_by, approved_at = @approved_at,
+    updated_at = @updated_at
 WHERE %s AND id = @id;`, scope.SQLFragment())
 
 	args := pgx.StrictNamedArgs{
@@ -139,6 +147,9 @@ WHERE %s AND id = @id;`, scope.SQLFragment())
 		"changelog":    v.Changelog,
 		"quorum":       v.Quorum,
 		"published_at": v.PublishedAt,
+		"published_by": v.PublishedBy,
+		"approved_by":  v.ApprovedBy,
+		"approved_at":  v.ApprovedAt,
 		"updated_at":   v.UpdatedAt,
 	}
 	maps.Copy(args, scope.SQLArguments())
