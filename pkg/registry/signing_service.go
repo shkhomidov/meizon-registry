@@ -119,7 +119,14 @@ func (s *Service) assembleBundle(ctx context.Context, conn pg.Querier, scope cor
 		return nil, err
 	}
 	if requirementCount > 0 {
-		return s.buildBundleV2(ctx, conn, scope, framework, version)
+		// Bundles are re-assembled from live tables on every request while the
+		// signature served alongside is the stored one, so assembly must
+		// reproduce the exact shape this version was signed under. A version
+		// signed as v2 carries its mappings inline forever; from v3 they live
+		// in mapping sets instead. Getting this wrong does not fail loudly here
+		// — it fails at the consumer, as a tamper rejection.
+		return s.buildBundleV2(ctx, conn, scope, framework, version,
+			version.BundleSchema != fwschema.SchemaVersion3)
 	}
 
 	var controls coredata.Controls
@@ -129,15 +136,18 @@ func (s *Service) assembleBundle(ctx context.Context, conn pg.Querier, scope cor
 	return buildBundle(framework, version, controls), nil
 }
 
-// buildBundleV2 assembles the v2 exchange document from the version's stored
-// structure and code-based mappings: categories, their requirements, and the
-// mappings each requirement declares. Resolution state is deliberately
-// excluded — signed content addresses targets by code only, which is what lets
-// a stub resolve later without changing the signature.
-func (s *Service) buildBundleV2(ctx context.Context, conn pg.Querier, scope coredata.Scoper, framework coredata.Framework, version coredata.FrameworkVersion) (*fwschema.Framework, error) {
+// buildBundleV2 assembles the exchange document from the version's stored
+// structure: categories and their requirements. Resolution state is
+// deliberately excluded — signed content addresses targets by code only, which
+// is what lets a stub resolve later without changing the signature.
+//
+// inlineMappings reproduces the v2 shape, where each requirement carried its
+// cross-mappings. From v3 onward mappings are distributed as separate signed
+// mapping sets, so that a mapping can be added or corrected without
+// re-versioning and re-publishing every framework it touches.
+func (s *Service) buildBundleV2(ctx context.Context, conn pg.Querier, scope coredata.Scoper, framework coredata.Framework, version coredata.FrameworkVersion, inlineMappings bool) (*fwschema.Framework, error) {
 	var categories coredata.RequirementCategories
 	var requirements coredata.Requirements
-	var mappings coredata.RequirementCrossMappings
 
 	if err := categories.LoadAllByVersion(ctx, conn, scope, version.ID); err != nil {
 		return nil, err
@@ -145,19 +155,22 @@ func (s *Service) buildBundleV2(ctx context.Context, conn pg.Querier, scope core
 	if err := requirements.LoadAllByVersion(ctx, conn, scope, version.ID); err != nil {
 		return nil, err
 	}
-	if err := mappings.LoadAllByVersion(ctx, conn, scope, version.ID); err != nil {
-		return nil, err
-	}
 
 	mapsByRequirement := map[gid.GID][]fwschema.ItemMapping{}
-	for _, m := range mappings {
-		mapsByRequirement[m.SourceRequirementID] = append(mapsByRequirement[m.SourceRequirementID], fwschema.ItemMapping{
-			Relation:  fwschema.MappingRelation(m.Relation),
-			Framework: m.TargetFrameworkCode,
-			Version:   m.TargetFrameworkVersion,
-			Item:      m.TargetRequirementCode,
-			Notes:     m.Notes,
-		})
+	if inlineMappings {
+		var mappings coredata.RequirementCrossMappings
+		if err := mappings.LoadAllByVersion(ctx, conn, scope, version.ID); err != nil {
+			return nil, err
+		}
+		for _, m := range mappings {
+			mapsByRequirement[m.SourceRequirementID] = append(mapsByRequirement[m.SourceRequirementID], fwschema.ItemMapping{
+				Relation:  fwschema.MappingRelation(m.Relation),
+				Framework: m.TargetFrameworkCode,
+				Version:   m.TargetFrameworkVersion,
+				Item:      m.TargetRequirementCode,
+				Notes:     m.Notes,
+			})
+		}
 	}
 
 	reqsByCategory := map[gid.GID][]fwschema.Requirement{}
@@ -180,8 +193,13 @@ func (s *Service) buildBundleV2(ctx context.Context, conn pg.Querier, scope core
 		})
 	}
 
+	schemaVersion := fwschema.SchemaVersion3
+	if inlineMappings {
+		schemaVersion = fwschema.SchemaVersion2
+	}
+
 	bundle := &fwschema.Framework{
-		SchemaVersion: fwschema.SchemaVersion2,
+		SchemaVersion: schemaVersion,
 		ID:            framework.ReferenceID,
 		Name:          framework.Name,
 		ShortName:     framework.ShortName,

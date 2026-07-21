@@ -23,6 +23,7 @@ import (
 
 	"go.gearno.de/kit/pg"
 	"go.meizon.cloud/registry/pkg/coredata"
+	"go.meizon.cloud/registry/pkg/fwschema"
 	"go.meizon.cloud/registry/pkg/gid"
 	"go.meizon.cloud/registry/pkg/iam"
 )
@@ -220,6 +221,13 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 		version.Status = coredata.FrameworkVersionStatusPublished
 		version.PublishedAt = &publishedAt
 		version.PublishedBy = actorID.String()
+		// Pin the exchange schema before assembling, so what gets signed and
+		// what we record as having been signed cannot disagree. Assembly reads
+		// this field, so setting it afterwards would sign one shape and claim
+		// another — a mismatch that surfaces only at the consumer.
+		if version.BundleSchema == "" {
+			version.BundleSchema = fwschema.SchemaVersion3
+		}
 
 		bundle, err := s.assembleBundle(ctx, tx, scope, framework, version)
 		if err != nil {

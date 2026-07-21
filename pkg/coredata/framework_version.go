@@ -48,14 +48,19 @@ type (
 		PublishedBy string     `db:"published_by"`
 		ApprovedBy  string     `db:"approved_by"`
 		ApprovedAt  *time.Time `db:"approved_at"`
-		CreatedAt   time.Time  `db:"created_at"`
-		UpdatedAt   time.Time  `db:"updated_at"`
+		// BundleSchema records the exchange-schema version this version's
+		// signature was computed over. Assembly branches on it, because a
+		// bundle is rebuilt from live tables on every request and must keep
+		// reproducing exactly the bytes that were signed.
+		BundleSchema string    `db:"bundle_schema"`
+		CreatedAt    time.Time `db:"created_at"`
+		UpdatedAt    time.Time `db:"updated_at"`
 	}
 
 	FrameworkVersions []*FrameworkVersion
 )
 
-const frameworkVersionColumns = `id, framework_id, version, status, content_hash, signature, key_id, changelog, quorum, author_id, published_at, published_by, approved_by, approved_at, created_at, updated_at`
+const frameworkVersionColumns = `id, framework_id, version, status, content_hash, signature, key_id, changelog, quorum, author_id, published_at, published_by, approved_by, approved_at, bundle_schema, created_at, updated_at`
 
 func (v FrameworkVersion) Insert(ctx context.Context, conn pg.Tx, scope Scoper) error {
 	q := `
@@ -91,6 +96,15 @@ INSERT INTO framework_versions (
 	}
 
 	return nil
+}
+
+// orDefaultSchema guards against writing an empty bundle schema, which would
+// make assembly ambiguous for a version that has already been signed.
+func orDefaultSchema(s string) string {
+	if s == "" {
+		return "3.0"
+	}
+	return s
 }
 
 func (v *FrameworkVersion) LoadByID(ctx context.Context, conn pg.Querier, scope Scoper, id gid.GID) error {
@@ -135,7 +149,7 @@ UPDATE framework_versions
 SET status = @status, content_hash = @content_hash, signature = @signature, key_id = @key_id,
     changelog = @changelog, quorum = @quorum, published_at = @published_at,
     published_by = @published_by, approved_by = @approved_by, approved_at = @approved_at,
-    updated_at = @updated_at
+    bundle_schema = @bundle_schema, updated_at = @updated_at
 WHERE %s AND id = @id;`, scope.SQLFragment())
 
 	args := pgx.StrictNamedArgs{
@@ -149,8 +163,9 @@ WHERE %s AND id = @id;`, scope.SQLFragment())
 		"published_at": v.PublishedAt,
 		"published_by": v.PublishedBy,
 		"approved_by":  v.ApprovedBy,
-		"approved_at":  v.ApprovedAt,
-		"updated_at":   v.UpdatedAt,
+		"approved_at":   v.ApprovedAt,
+		"bundle_schema": orDefaultSchema(v.BundleSchema),
+		"updated_at":    v.UpdatedAt,
 	}
 	maps.Copy(args, scope.SQLArguments())
 
