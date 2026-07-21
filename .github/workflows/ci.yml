@@ -86,8 +86,21 @@ jobs:
         working-directory: apps/registry
         run: npm ci && npm run build
 
+      # Same swap the Dockerfile performs: replace the committed placeholder
+      # with the real bundle so go:embed picks it up. Without this the binary
+      # builds fine but serves the "console was not built in" placeholder.
+      - name: Embed console
+        run: |
+          rm -rf pkg/server/console/dist
+          cp -r apps/registry/dist pkg/server/console/dist
+
       - name: Build binaries
         run: make build
+
+      - name: Confirm the real console is embedded
+        run: |
+          test -d pkg/server/console/dist/assets \
+            || { echo "::error::placeholder embedded instead of the built console"; exit 1; }
 
       # Proves the image assembles on every PR. Not pushed — release.yml owns
       # publishing, so nothing reaches the registry without a tag.
