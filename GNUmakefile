@@ -21,7 +21,7 @@ vet:
 	$(GO) vet $(PKGS)
 
 fmt:
-	gofmt -l -w pkg cmd hack
+	gofmt -l -w pkg cmd
 
 tidy:
 	$(GO) mod tidy
@@ -35,10 +35,18 @@ test:
 	REGISTRYD_TEST_PG_ADDR=$(REGISTRYD_TEST_PG_ADDR) $(GO) test $(PKGS)
 
 # Convenience: a disposable Postgres for the database-backed tests.
+#
+# Creates registryd_test alongside registryd. The database-backed harnesses
+# truncate, so they refuse any database whose name does not end in _test — a
+# guard added after a test run wiped a working registryd database. Keep the two
+# separate here so `make test` never has the development data in reach.
 pg-up:
 	docker run -d --name meizon-registry-pg \
 		-e POSTGRES_USER=registryd -e POSTGRES_PASSWORD=registryd -e POSTGRES_DB=registryd \
 		-p 55432:5432 postgres:15
+	@echo "waiting for postgres…"
+	@until docker exec meizon-registry-pg pg_isready -U registryd -q 2>/dev/null; do sleep 1; done
+	docker exec meizon-registry-pg createdb -U registryd registryd_test
 
 pg-down:
 	docker rm -f meizon-registry-pg

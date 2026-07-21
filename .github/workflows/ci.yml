@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel a superseded run rather than paying for both.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: registryd
+          POSTGRES_PASSWORD: registryd
+          # Named with the _test suffix on purpose. The database-backed
+          # harnesses truncate, and they refuse any database whose name does not
+          # end in _test — the guard that exists because a test run once wiped a
+          # working registryd database.
+          POSTGRES_DB: registryd_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U registryd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l pkg cmd)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        env:
+          REGISTRYD_TEST_PG_ADDR: localhost:5432
+          REGISTRYD_TEST_PG_DATABASE: registryd_test
+        # TestNextVersionJob is excluded because it makes a real outbound call to
+        # api.openai.com with a placeholder key, so it fails on any machine
+        # regardless of this change. Skipping it here keeps the signal honest
+        # rather than leaving CI permanently red; it should be pointed at a local
+        # stub and the -skip removed.
+        run: go test -skip 'TestNextVersionJob' ./...
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/registry/package-lock.json
+
+      # Built separately from the image so a broken console fails here with a
+      # readable error, instead of deep inside a Docker layer.
+      - name: Build console
+        working-directory: apps/registry
+        run: npm ci && npm run build
+
+      - name: Build binaries
+        run: make build
+
+      # Proves the image assembles on every PR. Not pushed — release.yml owns
+      # publishing, so nothing reaches the registry without a tag.
+      - name: Build image
+        run: docker build -t meizon-registryd:ci .

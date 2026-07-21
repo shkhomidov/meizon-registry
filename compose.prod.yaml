@@ -24,8 +24,11 @@ services:
 
   # One-shot: render REGISTRYD_* env -> /etc/registryd/config.yml on the shared volume.
   bootstrap:
+    # REGISTRYD_IMAGE points at a published image (e.g. a GHCR release tag) so
+    # the server pulls rather than builds; unset, it falls back to building
+    # locally from this checkout. See docs/DEPLOY-GITHUB.md.
     build: .
-    image: meizon-registryd:latest
+    image: ${REGISTRYD_IMAGE:-meizon-registryd:latest}
     entrypoint: ["/usr/local/bin/registryd-bootstrap", "-output", "/etc/registryd/config.yml"]
     environment: &registryd-env
       REGISTRYD_ENCRYPTION_KEY: ${REGISTRYD_ENCRYPTION_KEY:?set REGISTRYD_ENCRYPTION_KEY}
@@ -41,7 +44,7 @@ services:
 
   registryd:
     build: .
-    image: meizon-registryd:latest
+    image: ${REGISTRYD_IMAGE:-meizon-registryd:latest}
     depends_on:
       postgres:
         condition: service_healthy
