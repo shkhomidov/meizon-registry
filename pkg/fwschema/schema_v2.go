@@ -19,6 +19,19 @@ package fwschema
 // cross-mappings on items. v1 bundles (flat controls) remain valid.
 const SchemaVersion2 = "2.0"
 
+// SchemaVersion3 is v2 with cross-mappings removed from the document.
+//
+// Mappings became a separate signed artifact (see pkg/fwmap) because they could
+// not live here safely: a distributed bundle is re-assembled from live tables
+// while the signature served with it is the stored one, so editing a mapping
+// after publication changed the bytes and made every consumer reject the bundle
+// as tampered. Keeping them inline also meant connecting a new framework forced
+// a re-publish of every framework that mapped to it.
+//
+// v2 documents remain valid and are still assembled for versions signed under
+// it — their stored signature covers mappings, so it must keep reproducing them.
+const SchemaVersion3 = "3.0"
+
 // MappingRelation classifies how a source item relates to a target item.
 type MappingRelation string
 
@@ -137,9 +150,10 @@ type (
 	}
 )
 
-// IsV2 reports whether the framework uses the hierarchical schema.
+// IsV2 reports whether the framework uses the hierarchical schema. v3 is v2
+// minus inline mappings, so every structural consumer treats them alike.
 func (f *Framework) IsV2() bool {
-	return f.SchemaVersion == SchemaVersion2
+	return f.SchemaVersion == SchemaVersion2 || f.SchemaVersion == SchemaVersion3
 }
 
 // WalkAssessable visits every assessable unit in authored order: each

@@ -41,6 +41,86 @@ type CatalogEntry struct {
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
+// ChangeEvent is one entry of the consumer-facing change feed.
+type ChangeEvent struct {
+	Seq         int64     `json:"seq"`
+	Kind        string    `json:"kind"` // published | deprecated
+	Framework   string    `json:"framework"`
+	Version     string    `json:"version"`
+	ContentHash string    `json:"contentHash,omitempty"`
+	Region      string    `json:"region,omitempty"`
+	OccurredAt  time.Time `json:"occurredAt"`
+}
+
+// ChangeFeed is a page of the feed plus the cursor to resume from.
+type ChangeFeed struct {
+	Events []ChangeEvent `json:"events"`
+	// NextSeq is where the consumer should resume. It advances only over
+	// events actually returned, so a client that persists it after a
+	// successful import can never skip one.
+	NextSeq int64 `json:"nextSeq"`
+	// HeadSeq is the newest sequence visible to this token, so a consumer can
+	// report how far behind it is without draining the feed.
+	HeadSeq int64 `json:"headSeq"`
+	HasMore bool  `json:"hasMore"`
+}
+
+// Change-feed paging bounds. The default is small enough that a consumer
+// importing synchronously stays responsive; the max caps a single query.
+const (
+	changesDefaultLimit = 100
+	changesMaxLimit     = 500
+)
+
+// Changes returns events after the cursor that this token may see.
+//
+// This supersedes the catalog's `?since=<timestamp>` filter, which could not
+// represent a retirement and was unsafe as a cursor: an event committed at T but
+// made visible after the consumer read T would be lost with no way to detect it.
+func (s *Service) Changes(ctx context.Context, tc TokenContext, since int64, limit int) (ChangeFeed, error) {
+	if since < 0 {
+		since = 0
+	}
+	switch {
+	case limit <= 0:
+		limit = changesDefaultLimit
+	case limit > changesMaxLimit:
+		limit = changesMaxLimit
+	}
+
+	feed := ChangeFeed{Events: []ChangeEvent{}, NextSeq: since}
+	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		head, err := coredata.HeadSeq(ctx, conn, tc.OwnerTenant, tc.Regions)
+		if err != nil {
+			return err
+		}
+		feed.HeadSeq = head
+
+		// Ask for one more than requested: if it comes back, there is another
+		// page. Cheaper and race-free compared to a separate COUNT.
+		var events coredata.DistributionEvents
+		if err := events.LoadSince(ctx, conn, tc.OwnerTenant, tc.Regions, since, limit+1); err != nil {
+			return err
+		}
+
+		feed.HasMore = len(events) > limit
+		if feed.HasMore {
+			events = events[:limit]
+		}
+
+		for _, e := range events {
+			feed.Events = append(feed.Events, ChangeEvent{
+				Seq: e.Seq, Kind: e.Kind, Framework: e.FrameworkRef,
+				Version: e.Version, ContentHash: e.ContentHash,
+				Region: e.Region, OccurredAt: e.CreatedAt,
+			})
+			feed.NextSeq = e.Seq
+		}
+		return nil
+	})
+	return feed, err
+}
+
 // TokenContext is the resolved identity of a distribution consumer.
 type TokenContext struct {
 	TokenID     gid.GID
@@ -223,6 +303,12 @@ func (s *Service) Versions(ctx context.Context, tc TokenContext, referenceID str
 			return err
 		}
 		if !framework.Public && framework.ID.TenantID() != tc.OwnerTenant {
+			return ErrNotDistributable
+		}
+		// Region scope, same rule as resolveDistributable. Without it a token
+		// scoped to one region could enumerate the versions and content hashes
+		// of a framework in another — metadata it can never fetch the body of.
+		if len(tc.Regions) > 0 && !contains(tc.Regions, framework.Region) {
 			return ErrNotDistributable
 		}
 		return versions.LoadAllByFramework(ctx, conn, coredata.NewScopeFromObjectID(framework.ID), framework.ID)

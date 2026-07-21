@@ -66,7 +66,7 @@ func newTestService(t *testing.T) (*registry.Service, *pg.Client) {
 
 	// Clean slate.
 	if err := client.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
-		_, err := conn.Exec(ctx, `TRUNCATE identities, memberships, frameworks, framework_versions, controls, approvals, distribution_tokens, signing_keys, audit_log, downloads CASCADE;`)
+		_, err := conn.Exec(ctx, `TRUNCATE identities, memberships, frameworks, framework_versions, controls, approvals, distribution_tokens, signing_keys, audit_log, downloads, distribution_events CASCADE;`)
 		return err
 	}); err != nil {
 		t.Fatalf("truncate: %v", err)

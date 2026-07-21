@@ -64,6 +64,11 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/frameworks/{ref}/submit", h.transition(transitionSubmit))
 	r.Post("/frameworks/{ref}/approve", h.transition(transitionApprove))
 	r.Post("/frameworks/{ref}/publish", h.transition(transitionPublish))
+	// Reject sends a submission back to DRAFT; deprecate retires a published
+	// version and is what tells consumers to stop using it. Both existed in the
+	// service with no way to reach them — a moderator could only ever say yes.
+	r.Post("/frameworks/{ref}/reject", h.transition(transitionReject))
+	r.Post("/frameworks/{ref}/deprecate", h.transition(transitionDeprecate))
 
 	// Universal hierarchy + cross-mappings (all UI-managed).
 	r.Get("/frameworks/{ref}/structure", h.getStructure)
@@ -389,6 +394,8 @@ const (
 	transitionSubmit transitionKind = iota
 	transitionApprove
 	transitionPublish
+	transitionReject
+	transitionDeprecate
 )
 
 func (h *Handler) transition(kind transitionKind) http.HandlerFunc {
@@ -417,6 +424,14 @@ func (h *Handler) transition(kind transitionKind) http.HandlerFunc {
 			err = h.svc.Approve(r.Context(), actor, versionID, body.Comment)
 		case transitionPublish:
 			err = h.svc.Publish(r.Context(), actor, versionID)
+		case transitionReject:
+			var body struct {
+				Comment string `json:"comment"`
+			}
+			_ = httpx.DecodeOptional(r, &body)
+			err = h.svc.Reject(r.Context(), actor, versionID, body.Comment)
+		case transitionDeprecate:
+			err = h.svc.Deprecate(r.Context(), actor, versionID)
 		}
 		if err != nil {
 			httpx.ServiceError(w, err)

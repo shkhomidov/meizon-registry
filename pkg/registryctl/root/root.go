@@ -176,6 +176,8 @@ func newFrameworkCmd(f *cmdutil.Factory) *cobra.Command {
 	cmd.AddCommand(newFrameworkTransitionCmd(f, "submit", "Submit the latest version for review", transitionSubmit))
 	cmd.AddCommand(newFrameworkTransitionCmd(f, "approve", "Approve the latest version", transitionApprove))
 	cmd.AddCommand(newFrameworkTransitionCmd(f, "publish", "Publish the latest version", transitionPublish))
+	cmd.AddCommand(newFrameworkTransitionCmd(f, "reject", "Reject the latest version, returning it to DRAFT", transitionReject))
+	cmd.AddCommand(newFrameworkTransitionCmd(f, "deprecate", "Deprecate the latest published version", transitionDeprecate))
 	cmd.AddCommand(newFrameworkListCmd(f))
 	return cmd
 }
@@ -265,6 +267,8 @@ const (
 	transitionSubmit transitionKind = iota
 	transitionApprove
 	transitionPublish
+	transitionReject
+	transitionDeprecate
 )
 
 func newFrameworkTransitionCmd(f *cmdutil.Factory, use, short string, kind transitionKind) *cobra.Command {
@@ -292,6 +296,10 @@ func newFrameworkTransitionCmd(f *cmdutil.Factory, use, short string, kind trans
 				err = svc.Approve(cmd.Context(), actorID, versionID, comment)
 			case transitionPublish:
 				err = svc.Publish(cmd.Context(), actorID, versionID)
+			case transitionReject:
+				err = svc.Reject(cmd.Context(), actorID, versionID, comment)
+			case transitionDeprecate:
+				err = svc.Deprecate(cmd.Context(), actorID, versionID)
 			}
 			if err != nil {
 				return err
@@ -302,8 +310,8 @@ func newFrameworkTransitionCmd(f *cmdutil.Factory, use, short string, kind trans
 	}
 	cmd.Flags().StringVar(&actor, "actor", "", "email of the acting user (required)")
 	cmd.Flags().StringVar(&framework, "framework", "", "framework reference id (required)")
-	if kind == transitionApprove {
-		cmd.Flags().StringVar(&comment, "comment", "", "approval comment")
+	if kind == transitionApprove || kind == transitionReject {
+		cmd.Flags().StringVar(&comment, "comment", "", "reviewer comment")
 	}
 	_ = cmd.MarkFlagRequired("actor")
 	_ = cmd.MarkFlagRequired("framework")

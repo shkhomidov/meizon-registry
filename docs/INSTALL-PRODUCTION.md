@@ -1,5 +1,9 @@
 # Meizon Framework Registry — Production Install
 
+> For getting a build from GitHub onto a server — CI, image publishing to GHCR,
+> release tags and rollback — see [DEPLOY-GITHUB.md](DEPLOY-GITHUB.md). This
+> document covers the server itself.
+
 `registryd` is a Go service backed by PostgreSQL. Minimum footprint:
 **registryd + PostgreSQL 15 + an HTTPS reverse proxy**. Migrations auto-apply on
 boot; there is no separate migrate step.

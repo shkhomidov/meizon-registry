@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -47,6 +48,7 @@ func (h *Handler) Routes() http.Handler {
 
 	r.Get("/catalog", h.catalog)
 	r.Head("/catalog", h.catalog)
+	r.Get("/changes", h.changes)
 	r.Get("/frameworks/{id}", h.framework)
 	r.Get("/frameworks/{id}/versions/{version}", h.bundle)
 	r.Head("/frameworks/{id}/versions/{version}", h.bundle)
@@ -84,6 +86,45 @@ func (h *Handler) catalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, http.StatusOK, entries)
+}
+
+// changes serves the cursor-based change feed: "what happened after seq N that I
+// am allowed to see". A consumer persists nextSeq only after it has successfully
+// imported the page, so a crash re-delivers rather than skips.
+func (h *Handler) changes(w http.ResponseWriter, r *http.Request) {
+	tc, ok := authn.TokenContextFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var since int64
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid since cursor; expected a non-negative integer sequence number")
+			return
+		}
+		since = n
+	}
+
+	var limit int
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit; expected a positive integer")
+			return
+		}
+		limit = n
+	}
+
+	feed, err := h.svc.Changes(r.Context(), tc, since, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot load changes")
+		return
+	}
+
+	writeJSON(w, r, http.StatusOK, feed)
 }
 
 func (h *Handler) framework(w http.ResponseWriter, r *http.Request) {

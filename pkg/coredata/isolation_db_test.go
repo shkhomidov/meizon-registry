@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,10 +36,24 @@ func testClient(t *testing.T) *pg.Client {
 	if addr == "" {
 		t.Skip("set REGISTRYD_TEST_PG_ADDR to run database-backed tests")
 	}
+	// This harness TRUNCATEs. It must never be able to reach a database that
+	// somebody is working in: pointing REGISTRYD_TEST_PG_ADDR at a live
+	// instance previously destroyed every framework in it, because the database
+	// name was hardcoded to "registryd" — the development database — rather
+	// than the test one. A name that does not end in _test is refused outright,
+	// so the blast radius cannot be widened by an env var either.
+	database := envOrDefault("REGISTRYD_TEST_PG_DATABASE", "registryd_test")
+	if !strings.HasSuffix(database, "_test") {
+		t.Fatalf("refusing to run destructive tests against database %q: "+
+			"this harness truncates, so it only runs against a database whose name ends in _test", database)
+	}
+
 	logger := log.NewLogger(log.WithName("coredata-test"))
 	client, err := pg.NewClient(
 		pg.WithAddr(addr),
-		pg.WithUser("registryd"), pg.WithPassword("registryd"), pg.WithDatabase("registryd"),
+		pg.WithUser(envOrDefault("REGISTRYD_TEST_PG_USER", "registryd")),
+		pg.WithPassword(envOrDefault("REGISTRYD_TEST_PG_PASSWORD", "registryd")),
+		pg.WithDatabase(database),
 		pg.WithApplicationName("coredata-test"),
 		pg.WithRegisterer(prometheus.NewRegistry()),
 	)
@@ -153,4 +168,11 @@ func TestCatalogCopyrightGate(t *testing.T) {
 	if len(ownerView) != 2 {
 		t.Fatalf("owner should see both frameworks, got: %d", len(ownerView))
 	}
+}
+
+func envOrDefault(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
