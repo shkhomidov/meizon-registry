@@ -194,11 +194,11 @@ export default function GenerateFramework() {
           </div>
 
           {mode === 'file' ? (
-            <Field label="Standard document" hint="PDF, text or markdown">
+            <Field label="Standard document" hint="PDF, Excel, CSV, text or markdown. A framework JSON export is imported as-is.">
               <label className="flex items-center gap-2 bg-surface border border-border rounded-md px-3 py-2 cursor-pointer text-[13px] max-w-lg">
                 <Upload size={15} className="text-sage" />
                 <span className="text-muted">{fileName || 'Choose a file…'}</span>
-                <input type="file" accept=".pdf,.txt,.md,.markdown,.json,text/*,application/pdf"
+                <input type="file" accept=".pdf,.xlsx,.csv,.tsv,.txt,.md,.markdown,.json,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                   onChange={(e) => { const f = e.target.files?.[0]; setFile(f || null); setFileName(f ? f.name : '') }}
                   className="hidden" />
               </label>

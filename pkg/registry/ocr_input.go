@@ -156,7 +156,10 @@ func (s *Service) resolveText(ctx context.Context, job *ingestJob, actorID gid.G
 			continue
 		}
 		if text, ok := res.ByIndex[idx]; ok && text != "" {
-			merged[idx] = text
+			// OCR output does not pass through docextract, so it is sanitized
+			// here: a transcription carries the same NUL/invalid-UTF-8 risk that
+			// would fail the jsonb write once the pipeline has finished.
+			merged[idx] = docextract.Sanitize(text)
 			filled++
 		}
 	}

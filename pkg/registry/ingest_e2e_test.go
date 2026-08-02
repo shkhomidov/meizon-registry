@@ -16,6 +16,7 @@ package registry_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,26 @@ const (
 	stageExtract  = `{"categories":[{"ref":"AC","name":"Access Control"}],"requirements":[{"ref":"AC-1","category":"AC","name":"Define access model","description":"least privilege","sourceExcerpt":"Define an access control model"}]}`
 	stageControls = `{"controls":[{"ref":"access-policy","name":"Access control policy","description":"A written policy.","category":"Policy"}],"links":[{"requirement":"AC-1","controls":["access-policy"]}]}`
 )
+
+// stepRouter returns a fake-LLM router keyed on each pipeline step's system
+// prompt, so a test stays correct however many times a step runs. It is the
+// robust alternative to a positional response list, which silently desyncs when
+// a pipeline's per-step call count changes (as the next-version pipeline's does).
+func stepRouter() func(llm.Request) string {
+	return func(req llm.Request) string {
+		switch {
+		case strings.Contains(req.System, "You identify compliance standards"):
+			return stageIdentify
+		case strings.Contains(req.System, "You extract the structure"):
+			return stageExtract
+		case strings.Contains(req.System, "You are a GRC implementation expert"):
+			return stageControls
+		case strings.Contains(req.System, "You review an extracted compliance framework"):
+			return "Looks complete."
+		}
+		return ""
+	}
+}
 
 // waitForJob polls a generation job until it leaves the running state.
 func waitForJob(t *testing.T, svc *registry.Service, jobID string) registry.IngestStatus {

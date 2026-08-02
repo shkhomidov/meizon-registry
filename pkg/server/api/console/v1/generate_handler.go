@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.meizon.cloud/registry/pkg/fwflat"
+	"go.meizon.cloud/registry/pkg/gid"
 	"go.meizon.cloud/registry/pkg/registry"
 	"go.meizon.cloud/registry/pkg/server/api/authn"
 	"go.meizon.cloud/registry/pkg/server/api/httpx"
@@ -38,11 +39,45 @@ const maxUploadBytes = 25 << 20 // 25 MiB
 func (h *Handler) generateFramework(w http.ResponseWriter, r *http.Request) {
 	actor, _ := authn.IdentityFrom(r.Context())
 
+	// A multipart upload is read exactly once, then routed on the bytes in hand:
+	// a framework JSON export is imported as authored (no model), everything else
+	// goes through generation. Detecting the export before generation means an
+	// arbitrary (non-framework) JSON still falls through to the model.
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		filename, data, brief, _, ok := readMultipartDocument(w, r)
+		if !ok {
+			return
+		}
+		if doc, isFramework := registry.DetectFrameworkJSON(filename, data); isFramework {
+			jobID, err := h.svc.StartStructuredImportJob(r.Context(), actor, doc, filename)
+			if err != nil {
+				httpx.ServiceError(w, err)
+				return
+			}
+			httpx.JSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "pages": 0, "ocrPages": 0})
+			return
+		}
+		prepared, err := h.svc.PrepareDocument(r.Context(), filename, data)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.startGenerationJob(w, r, actor, prepared, brief)
+		return
+	}
+
+	// JSON paste body: {text, brief}.
 	docText, brief, _, ok := readGenerationInput(w, r, h.svc)
 	if !ok {
 		return
 	}
+	h.startGenerationJob(w, r, actor, docText, brief)
+}
 
+// startGenerationJob kicks off the model pipeline for a prepared document,
+// stages the source for archiving, and reports the OCR split up front so the
+// cost is visible before it is incurred rather than after.
+func (h *Handler) startGenerationJob(w http.ResponseWriter, r *http.Request, actor gid.GID, docText registry.DocInput, brief string) {
 	jobID, err := h.svc.StartGenerateJob(r.Context(), actor, docText, brief)
 	if err == nil && len(docText.Raw) > 0 {
 		h.svc.StageSourceDocument(r.Context(), actor, jobID, docText, docText.Filename, docText.Raw)
@@ -55,9 +90,6 @@ func (h *Handler) generateFramework(w http.ResponseWriter, r *http.Request) {
 		httpx.ServiceError(w, err)
 		return
 	}
-	// Report the OCR split up front: how many pages will be read by OCR, out of
-	// how many total. Waiting for the job to say so hides the cost until it has
-	// already been incurred.
 	httpx.JSON(w, http.StatusAccepted, map[string]any{
 		"jobId":    jobID,
 		"pages":    docText.PageCount(),
@@ -82,27 +114,13 @@ func (h *Handler) generateStatus(w http.ResponseWriter, r *http.Request) {
 // already written the response and returns ok=false.
 func readGenerationInput(w http.ResponseWriter, r *http.Request, svc *registry.Service) (in registry.DocInput, brief, version string, ok bool) {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-			httpx.Error(w, http.StatusBadRequest, "cannot read upload")
-			return in, "", "", false
-		}
-		brief = r.FormValue("brief")
-		version = r.FormValue("version")
-		file, header, err := r.FormFile("document")
-		if err != nil {
-			httpx.Error(w, http.StatusBadRequest, "a document file is required")
-			return in, "", "", false
-		}
-		defer func() { _ = file.Close() }()
-
-		data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes))
-		if err != nil {
-			httpx.Error(w, http.StatusBadRequest, "cannot read the document")
+		filename, data, brief, version, ok := readMultipartDocument(w, r)
+		if !ok {
 			return in, "", "", false
 		}
 		// Text layer first; a scan falls back to OCR inside the job, and says so
 		// here if OCR is not configured.
-		prepared, err := svc.PrepareDocument(r.Context(), header.Filename, data)
+		prepared, err := svc.PrepareDocument(r.Context(), filename, data)
 		if err != nil {
 			httpx.Error(w, http.StatusBadRequest, err.Error())
 			return in, "", "", false
@@ -115,6 +133,34 @@ func readGenerationInput(w http.ResponseWriter, r *http.Request, svc *registry.S
 		return in, "", "", false
 	}
 	return registry.DocInput{Text: body.Text}, body.Brief, body.Version, true
+}
+
+// readMultipartDocument parses a multipart upload once and returns the file's
+// name and bytes plus the brief/version form fields. It is the single place the
+// "document" upload is read, so callers that need the raw bytes (to sniff a
+// framework export before deciding how to handle them) and callers that go
+// straight to generation share one parse rather than repeating it. On error it
+// has written the response and returns ok=false.
+func readMultipartDocument(w http.ResponseWriter, r *http.Request) (filename string, data []byte, brief, version string, ok bool) {
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "cannot read upload")
+		return "", nil, "", "", false
+	}
+	brief = r.FormValue("brief")
+	version = r.FormValue("version")
+	file, header, err := r.FormFile("document")
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "a document file is required")
+		return "", nil, "", "", false
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err = io.ReadAll(io.LimitReader(file, maxUploadBytes))
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "cannot read the document")
+		return "", nil, "", "", false
+	}
+	return header.Filename, data, brief, version, true
 }
 
 // exportFramework downloads the framework as a flat meizon-framework/v2 file —

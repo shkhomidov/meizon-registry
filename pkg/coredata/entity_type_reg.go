@@ -49,6 +49,7 @@ const (
 	ControlCrossMappingEntityType     uint16 = 25
 	SourceDocumentEntityType          uint16 = 26
 	IngestJobEntityType               uint16 = 27
+	MappingSetEntityType              uint16 = 28
 )
 
 // NewEntityFromID returns a zero-valued entity of the type encoded in id, and
@@ -103,6 +104,8 @@ func NewEntityFromID(id gid.GID) (any, bool) {
 		return &SourceDocument{ID: id}, true
 	case IngestJobEntityType:
 		return &IngestJob{ID: id}, true
+	case MappingSetEntityType:
+		return &MappingSet{ID: id}, true
 	default:
 		return nil, false
 	}

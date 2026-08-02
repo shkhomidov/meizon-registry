@@ -54,6 +54,11 @@ func (h *Handler) Routes() http.Handler {
 	r.Head("/frameworks/{id}/versions/{version}", h.bundle)
 	r.Get("/frameworks/{id}/versions/{version}/seed", h.seed)
 
+	// Cross-mapping sets: a catalog for cold discovery, and fetch-by-pair, which
+	// the consumer also reaches from mapping_published feed events.
+	r.Get("/mappings", h.mappingCatalog)
+	r.Get("/mappings/{source}/{sourceVersion}/{target}/{targetVersion}", h.mappingSet)
+
 	return r
 }
 
@@ -125,6 +130,45 @@ func (h *Handler) changes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, r, http.StatusOK, feed)
+}
+
+// mappingCatalog lists the published cross-mapping sets this token may see.
+func (h *Handler) mappingCatalog(w http.ResponseWriter, r *http.Request) {
+	tc, ok := authn.TokenContextFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	entries, err := h.svc.MappingCatalog(r.Context(), tc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot load mapping catalog")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, entries)
+}
+
+// mappingSet serves the exact signed bytes of one mapping set. The response is
+// the stored document verbatim, so the consumer verifies precisely what was
+// signed.
+func (h *Handler) mappingSet(w http.ResponseWriter, r *http.Request) {
+	tc, ok := authn.TokenContextFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	doc, err := h.svc.MappingSetDocument(r.Context(), tc,
+		chi.URLParam(r, "source"), chi.URLParam(r, "sourceVersion"),
+		chi.URLParam(r, "target"), chi.URLParam(r, "targetVersion"))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "application/json")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(doc)
 }
 
 func (h *Handler) framework(w http.ResponseWriter, r *http.Request) {

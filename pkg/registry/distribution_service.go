@@ -43,13 +43,18 @@ type CatalogEntry struct {
 
 // ChangeEvent is one entry of the consumer-facing change feed.
 type ChangeEvent struct {
-	Seq         int64     `json:"seq"`
-	Kind        string    `json:"kind"` // published | deprecated
-	Framework   string    `json:"framework"`
-	Version     string    `json:"version"`
-	ContentHash string    `json:"contentHash,omitempty"`
-	Region      string    `json:"region,omitempty"`
-	OccurredAt  time.Time `json:"occurredAt"`
+	Seq         int64  `json:"seq"`
+	Kind        string `json:"kind"` // published | deprecated | mapping_published | mapping_deprecated
+	Framework   string `json:"framework"`
+	Version     string `json:"version"`
+	ContentHash string `json:"contentHash,omitempty"`
+	Region      string `json:"region,omitempty"`
+	// TargetFramework/TargetVersion are set only on mapping_* events: the other
+	// framework the mapping set connects to, so a consumer can tell whether it
+	// holds both ends before fetching.
+	TargetFramework string    `json:"targetFramework,omitempty"`
+	TargetVersion   string    `json:"targetVersion,omitempty"`
+	OccurredAt      time.Time `json:"occurredAt"`
 }
 
 // ChangeFeed is a page of the feed plus the cursor to resume from.
@@ -111,8 +116,9 @@ func (s *Service) Changes(ctx context.Context, tc TokenContext, since int64, lim
 		for _, e := range events {
 			feed.Events = append(feed.Events, ChangeEvent{
 				Seq: e.Seq, Kind: e.Kind, Framework: e.FrameworkRef,
-				Version: e.Version, ContentHash: e.ContentHash,
-				Region: e.Region, OccurredAt: e.CreatedAt,
+				Version: e.Version, ContentHash: e.ContentHash, Region: e.Region,
+				TargetFramework: e.TargetFrameworkRef, TargetVersion: e.TargetVersion,
+				OccurredAt: e.CreatedAt,
 			})
 			feed.NextSeq = e.Seq
 		}

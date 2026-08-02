@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.gearno.de/kit/pg"
@@ -55,6 +56,34 @@ func sourceView(d *coredata.SourceDocument) SourceDocumentView {
 	}
 }
 
+// contentTypeFor maps an upload's extension to a stored MIME type. It was
+// hardcoded to application/pdf, which mislabelled every non-PDF upload and made
+// the source-document download endpoint serve, say, an .xlsx as a PDF. Keyed on
+// extension because that is what the rest of the pipeline already trusts to
+// detect type; the browser-supplied content type is not consulted anywhere else
+// and is easily wrong.
+func contentTypeFor(filename string) string {
+	switch {
+	case strings.HasSuffix(strings.ToLower(filename), ".xlsx"):
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case strings.HasSuffix(strings.ToLower(filename), ".csv"):
+		return "text/csv"
+	case strings.HasSuffix(strings.ToLower(filename), ".tsv"):
+		return "text/tab-separated-values"
+	case strings.HasSuffix(strings.ToLower(filename), ".json"):
+		return "application/json"
+	case strings.HasSuffix(strings.ToLower(filename), ".txt"):
+		return "text/plain"
+	case strings.HasSuffix(strings.ToLower(filename), ".md"),
+		strings.HasSuffix(strings.ToLower(filename), ".markdown"):
+		return "text/markdown"
+	default:
+		// PDF stays the default: it is the overwhelmingly common upload and the
+		// original documents predate the other formats.
+		return "application/pdf"
+	}
+}
+
 // StageSourceDocument stores an uploaded file against a generation job, before
 // the auditor has decided whether to keep the resulting draft.
 //
@@ -70,7 +99,7 @@ func (s *Service) StageSourceDocument(ctx context.Context, actorID gid.GID, jobI
 		ID:          gid.New(s.cfg.PlatformTenant, coredata.SourceDocumentEntityType),
 		JobID:       jobID,
 		Filename:    filename,
-		ContentType: "application/pdf",
+		ContentType: contentTypeFor(filename),
 		ByteSize:    int64(len(data)),
 		SHA256:      hex.EncodeToString(sum[:]),
 		PageCount:   in.PageCount(),

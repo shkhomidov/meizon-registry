@@ -25,10 +25,15 @@ import (
 )
 
 // Event kinds. A consumer acts on these directly: `published` means fetch and
-// import, `deprecated` means stop trusting what you already hold.
+// import, `deprecated` means stop trusting what you already hold. The mapping_*
+// kinds carry the same meaning for a cross-mapping set — its target framework is
+// named in the target_* columns so a consumer can tell whether it holds both
+// ends before fetching.
 const (
-	DistributionEventPublished  = "published"
-	DistributionEventDeprecated = "deprecated"
+	DistributionEventPublished         = "published"
+	DistributionEventDeprecated        = "deprecated"
+	DistributionEventMappingPublished  = "mapping_published"
+	DistributionEventMappingDeprecated = "mapping_deprecated"
 )
 
 // distributionSeqLockKey is the advisory-lock key guarding seq assignment. Any
@@ -42,20 +47,25 @@ type (
 	// so the feed filters identically to /catalog even if the framework row is
 	// edited afterwards.
 	DistributionEvent struct {
-		Seq          int64     `db:"seq"`
-		Kind         string    `db:"kind"`
-		FrameworkRef string    `db:"framework_ref"`
-		Version      string    `db:"version"`
-		ContentHash  string    `db:"content_hash"`
-		Region       string    `db:"region"`
-		Public       bool      `db:"public"`
-		CreatedAt    time.Time `db:"created_at"`
+		Seq          int64  `db:"seq"`
+		Kind         string `db:"kind"`
+		FrameworkRef string `db:"framework_ref"`
+		Version      string `db:"version"`
+		ContentHash  string `db:"content_hash"`
+		Region       string `db:"region"`
+		Public       bool   `db:"public"`
+		// TargetFrameworkRef/TargetVersion are set only on mapping_* events: the
+		// other framework a mapping set connects to, so a consumer can decide
+		// whether it holds both ends. Empty for framework events.
+		TargetFrameworkRef string    `db:"target_framework_ref"`
+		TargetVersion      string    `db:"target_version"`
+		CreatedAt          time.Time `db:"created_at"`
 	}
 
 	DistributionEvents []*DistributionEvent
 )
 
-const distributionEventColumns = `seq, kind, framework_ref, version, content_hash, region, public, created_at`
+const distributionEventColumns = `seq, kind, framework_ref, version, content_hash, region, public, target_framework_ref, target_version, created_at`
 
 // Append writes one event, assigning seq under an advisory lock held to commit.
 //
@@ -76,23 +86,27 @@ func (e *DistributionEvent) Append(ctx context.Context, tx pg.Tx, tenantID gid.T
 
 	q := `
 INSERT INTO distribution_events (
-    tenant_id, seq, kind, framework_ref, version, content_hash, region, public, created_at
+    tenant_id, seq, kind, framework_ref, version, content_hash, region, public,
+    target_framework_ref, target_version, created_at
 ) VALUES (
     @tenant_id,
     (SELECT COALESCE(MAX(seq), 0) + 1 FROM distribution_events),
-    @kind, @framework_ref, @version, @content_hash, @region, @public, @created_at
+    @kind, @framework_ref, @version, @content_hash, @region, @public,
+    @target_framework_ref, @target_version, @created_at
 )
 RETURNING seq;`
 
 	args := pgx.StrictNamedArgs{
-		"tenant_id":     tenantID,
-		"kind":          e.Kind,
-		"framework_ref": e.FrameworkRef,
-		"version":       e.Version,
-		"content_hash":  e.ContentHash,
-		"region":        e.Region,
-		"public":        e.Public,
-		"created_at":    e.CreatedAt,
+		"tenant_id":            tenantID,
+		"kind":                 e.Kind,
+		"framework_ref":        e.FrameworkRef,
+		"version":              e.Version,
+		"content_hash":         e.ContentHash,
+		"region":               e.Region,
+		"public":               e.Public,
+		"target_framework_ref": e.TargetFrameworkRef,
+		"target_version":       e.TargetVersion,
+		"created_at":           e.CreatedAt,
 	}
 
 	if err := tx.QueryRow(ctx, q, args).Scan(&e.Seq); err != nil {

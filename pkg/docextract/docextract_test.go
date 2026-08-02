@@ -15,9 +15,11 @@
 package docextract
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestExtractText(t *testing.T) {
@@ -150,5 +152,67 @@ func TestUsablePagePerPage(t *testing.T) {
 		if i > 0 && !need {
 			t.Errorf("page %d has no text and must be OCR'd", i)
 		}
+	}
+}
+
+// TestSanitizeStripsNUL pins the character that cost a completed generation: a
+// NUL in a PDF's text layer marshals to a JSON escape that jsonb rejects
+// outright (SQLSTATE 22P05), failing the write after the pipeline has already
+// paid for OCR and every LLM call.
+func TestSanitizeStripsNUL(t *testing.T) {
+	got := Sanitize("abc\x00def")
+	if want := "abcdef"; got != want {
+		t.Errorf("Sanitize = %q, want %q", got, want)
+	}
+	if strings.ContainsRune(got, 0) {
+		t.Error("sanitized text still contains a NUL")
+	}
+
+	// Round-trip through the encoder that builds the payload, which is where the
+	// failure actually surfaced.
+	b, err := json.Marshal(map[string]string{"text": got})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "\\u0000") {
+		t.Errorf("marshalled payload still carries a NUL escape: %s", b)
+	}
+}
+
+// TestSanitizeRepairsInvalidUTF8 covers the other class Postgres rejects. The
+// same documents tend to produce both, so one pass handles them together.
+func TestSanitizeRepairsInvalidUTF8(t *testing.T) {
+	got := Sanitize("ok\xff\xfebad")
+	if !utf8.ValidString(got) {
+		t.Errorf("Sanitize left invalid UTF-8: %q", got)
+	}
+	if want := "okbad"; got != want {
+		t.Errorf("Sanitize = %q, want %q", got, want)
+	}
+}
+
+// TestSanitizeLeavesCleanTextAlone guards against over-eager stripping. Page
+// breaks in particular must survive: drop one and every later page index
+// shifts, so the reviewer's "jump to the source page" points at the wrong page.
+func TestSanitizeLeavesCleanTextAlone(t *testing.T) {
+	clean := "Page one." + PageBreak + "Page two — em dash, ünïcode, and\ttabs.\n"
+	if got := Sanitize(clean); got != clean {
+		t.Errorf("Sanitize altered clean text:\n got %q\nwant %q", got, clean)
+	}
+	if Sanitize("") != "" {
+		t.Error("Sanitize must leave the empty string alone")
+	}
+}
+
+// TestExtractSanitizesNonPDF pins the path that is easy to miss: valid UTF-8
+// still permits NUL, so a .txt or .json upload needs the same treatment a PDF
+// gets.
+func TestExtractSanitizesNonPDF(t *testing.T) {
+	out, err := Extract("notes.txt", []byte("Requirement 7\x00: restrict access."))
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if strings.ContainsRune(out, 0) {
+		t.Errorf("Extract returned text containing a NUL: %q", out)
 	}
 }
