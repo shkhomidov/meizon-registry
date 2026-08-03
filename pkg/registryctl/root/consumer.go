@@ -53,12 +53,28 @@ func newPullCmd() *cobra.Command {
 			}
 
 			for _, s := range result.Synced {
-				fmt.Printf("verified %-24s %-8s controls=%-3d -> %s\n", s.ID, s.Version, s.Controls, s.SeedPath)
+				// On an upgrade, show what changed rather than a bare "verified"
+				// — the whole point of the delta is that the operator sees the
+				// change was small.
+				if s.Delta != nil {
+					fmt.Printf("upgraded %-24s %s->%-8s +%d ~%d -%d (%d unchanged)\n",
+						s.ID, s.Delta.FromVersion, s.Version,
+						len(s.Delta.Added), len(s.Delta.Modified), len(s.Delta.Removed), s.Delta.Unchanged)
+				} else {
+					fmt.Printf("verified %-24s %-8s units=%-3d -> %s\n", s.ID, s.Version, s.Units, s.SeedPath)
+				}
+			}
+			for _, id := range result.Removed {
+				fmt.Printf("retired  %-24s (deprecated upstream)\n", id)
 			}
 			for _, fl := range result.Failures {
 				fmt.Fprintf(os.Stderr, "REJECTED %s: %s\n", fl.ID, fl.Error)
 			}
-			fmt.Printf("synced %d, rejected %d\n", len(result.Synced), len(result.Failures))
+			// Skipped is the sign incremental sync is working: on a quiet
+			// registry a re-run transfers nothing and every held framework is
+			// skipped.
+			fmt.Printf("synced %d, skipped %d, retired %d, rejected %d (cursor now %d)\n",
+				len(result.Synced), len(result.Skipped), len(result.Removed), len(result.Failures), result.Cursor)
 			if len(result.Failures) > 0 {
 				return fmt.Errorf("%d framework(s) failed verification", len(result.Failures))
 			}
@@ -106,7 +122,7 @@ func newVerifyCmd() *cobra.Command {
 				return fmt.Errorf("schema validation FAILED: %w", err)
 			}
 
-			fmt.Printf("OK: %s@%s verified, %d controls, key=%s\n", bundle.ID, bundle.Version, len(bundle.Controls), bundle.Signature.KeyID)
+			fmt.Printf("OK: %s@%s verified, %d units, key=%s\n", bundle.ID, bundle.Version, distclient.AssessableCount(&bundle), bundle.Signature.KeyID)
 			return nil
 		},
 	}

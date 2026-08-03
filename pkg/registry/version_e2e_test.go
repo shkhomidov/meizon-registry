@@ -28,11 +28,11 @@ func TestNextVersionJob(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 
-	// Two full runs: v1 then v2 (identify, extract, controls, qa each).
-	fake := &llm.Fake{Responses: []string{
-		stageIdentify, stageExtract, stageControls, "Looks complete.",
-		stageIdentify, stageExtract, stageControls, "Looks complete.",
-	}}
+	// Route responses by pipeline step, not by call order: the next-version
+	// pipeline makes a different number of calls than first-generation, and a
+	// positional list silently desyncs (a qa response reaching the identify
+	// step) the moment that count changes.
+	fake := &llm.Fake{Route: stepRouter()}
 	svc.SetLLMFactory(func(cfg llm.Config) (llm.Client, error) { return fake, nil })
 
 	if _, err := svc.BootstrapSuperAdmin(ctx, req(superAdminEmail, "Root")); err != nil {

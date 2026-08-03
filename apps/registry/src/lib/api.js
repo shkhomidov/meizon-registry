@@ -171,4 +171,8 @@ export const api = {
   adminGenerateKey: (keyId) => request('/console/v1/admin/keys', { method: 'POST', body: { keyId } }),
   adminTokens: () => request('/console/v1/admin/tokens'),
   adminIssueToken: (payload) => request('/console/v1/admin/tokens', { method: 'POST', body: payload }),
+  adminOrganizations: (status) => request(`/console/v1/admin/organizations${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  adminRegisterOrganization: (name) => request('/console/v1/admin/organizations', { method: 'POST', body: { name } }),
+  adminApproveOrganization: (tenant) => request(`/console/v1/admin/organizations/${encodeURIComponent(tenant)}/approve`, { method: 'POST' }),
+  adminSuspendOrganization: (tenant) => request(`/console/v1/admin/organizations/${encodeURIComponent(tenant)}/suspend`, { method: 'POST' }),
 }

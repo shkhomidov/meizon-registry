@@ -18,11 +18,13 @@
 package console_v1
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.meizon.cloud/registry/pkg/coredata"
+	"go.meizon.cloud/registry/pkg/gid"
 	"go.meizon.cloud/registry/pkg/registry"
 	"go.meizon.cloud/registry/pkg/server/api/authn"
 	"go.meizon.cloud/registry/pkg/server/api/httpx"
@@ -114,6 +116,12 @@ func (h *Handler) Routes() http.Handler {
 		ar.Post("/keys", h.generateKey)
 		ar.Get("/tokens", h.listTokens)
 		ar.Post("/tokens", h.issueToken)
+		// Organizations: the keyless-sync review queue. Approving an org lets it
+		// sync every published public framework instantly, with no token issued.
+		ar.Get("/organizations", h.listOrganizations)
+		ar.Post("/organizations", h.registerOrganization)
+		ar.Post("/organizations/{tenant}/approve", h.approveOrganization)
+		ar.Post("/organizations/{tenant}/suspend", h.suspendOrganization)
 		ar.Get("/mappings/unresolved", h.unresolvedMappings)
 		ar.Post("/mappings/resolve", h.resolveMappings)
 		ar.Get("/settings/llm", h.getLLMSettings)
@@ -165,6 +173,60 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, map[string]string{"id": id.String()})
+}
+
+func (h *Handler) listOrganizations(w http.ResponseWriter, r *http.Request) {
+	actor, _ := authn.IdentityFrom(r.Context())
+	orgs, err := h.svc.ListOrganizations(r.Context(), actor, r.URL.Query().Get("status"))
+	if err != nil {
+		httpx.ServiceError(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, orgs)
+}
+
+func (h *Handler) registerOrganization(w http.ResponseWriter, r *http.Request) {
+	actor, _ := authn.IdentityFrom(r.Context())
+	var body struct{ Name string }
+	if !httpx.DecodeJSON(w, r, &body) {
+		return
+	}
+	// requestedBy is the superadmin creating it here; a future self-serve signup
+	// would pass the registering org's own contact.
+	tenantID, err := h.svc.RegisterOrganization(r.Context(), body.Name, actor.String())
+	if err != nil {
+		httpx.ServiceError(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]string{"tenantId": tenantID.String()})
+}
+
+func (h *Handler) approveOrganization(w http.ResponseWriter, r *http.Request) {
+	h.orgTransition(w, r, func(ctx context.Context, actor gid.GID, tenant gid.TenantID) error {
+		return h.svc.ApproveOrganization(ctx, actor, tenant)
+	})
+}
+
+func (h *Handler) suspendOrganization(w http.ResponseWriter, r *http.Request) {
+	h.orgTransition(w, r, func(ctx context.Context, actor gid.GID, tenant gid.TenantID) error {
+		return h.svc.SuspendOrganization(ctx, actor, tenant)
+	})
+}
+
+// orgTransition parses the {tenant} param and applies a status change, so
+// approve and suspend share one parse-and-dispatch path.
+func (h *Handler) orgTransition(w http.ResponseWriter, r *http.Request, apply func(context.Context, gid.GID, gid.TenantID) error) {
+	actor, _ := authn.IdentityFrom(r.Context())
+	var tenant gid.TenantID
+	if err := tenant.UnmarshalText([]byte(chi.URLParam(r, "tenant"))); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid organization id")
+		return
+	}
+	if err := apply(r.Context(), actor, tenant); err != nil {
+		httpx.ServiceError(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) assignRole(w http.ResponseWriter, r *http.Request) {

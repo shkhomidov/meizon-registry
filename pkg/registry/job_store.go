@@ -98,10 +98,28 @@ func (st *jobStore) finish(jobID, status string, res *GeneratedFramework, diff m
 	}
 
 	ctx := context.Background()
-	if err := st.svc.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
-		return (coredata.IngestJob{}).Finish(ctx, conn, st.svc.platformScope(), id, status, payload, errText)
-	}); err != nil {
-		st.svc.logger.WarnCtx(ctx, "cannot record job completion: "+err.Error())
+	write := func(status string, payload []byte, errText string) error {
+		return st.svc.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+			return (coredata.IngestJob{}).Finish(ctx, conn, st.svc.platformScope(), id, status, payload, errText)
+		})
+	}
+
+	err = write(status, payload, errText)
+	if err == nil {
+		return
+	}
+
+	// The job MUST reach a terminal state. Leaving the row at "running" is worse
+	// than losing the payload: the console polls it forever, and an operator sees
+	// a job that is still working when nothing is. That is exactly what happened
+	// when a PDF's text carried a NUL and jsonb rejected the payload (22P05) —
+	// the generation had already succeeded and the run looked hung for hours.
+	//
+	// So retry without the payload. The result is unrecoverable either way; a
+	// visible failure is not.
+	st.svc.logger.ErrorCtx(ctx, "cannot record job completion, marking job failed: "+err.Error())
+	if rerr := write("error", nil, "the result could not be saved: "+err.Error()); rerr != nil {
+		st.svc.logger.ErrorCtx(ctx, "cannot mark job failed either, it will stay running: "+rerr.Error())
 	}
 }
 

@@ -13,6 +13,7 @@ import Audit from './pages/Audit.jsx'
 import AdminUsers from './pages/AdminUsers.jsx'
 import AdminKeys from './pages/AdminKeys.jsx'
 import AdminTokens from './pages/AdminTokens.jsx'
+import AdminOrganizations from './pages/AdminOrganizations.jsx'
 import AdminSettings from './pages/AdminSettings.jsx'
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
         {isSuper && <Route path="/admin/users" element={<AdminUsers />} />}
         {isSuper && <Route path="/admin/keys" element={<AdminKeys />} />}
         {isSuper && <Route path="/admin/tokens" element={<AdminTokens />} />}
+        {isSuper && <Route path="/admin/organizations" element={<AdminOrganizations />} />}
         {isSuper && <Route path="/admin/settings" element={<AdminSettings />} />}
         <Route path="/signin" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -16,18 +16,32 @@ package llm
 
 import "context"
 
-// Fake is a deterministic in-memory provider for tests. It returns Responses in
-// order, or the last one repeatedly.
+// Fake is a deterministic in-memory provider for tests.
+//
+// Two modes. Route, if set, selects a response by inspecting the request — so a
+// test keys responses to pipeline steps and stays correct however many times
+// each step runs. Otherwise Responses are returned in order (last one repeated
+// on overflow), which couples the test to the exact call count and is fragile
+// when a step's call count changes.
 type Fake struct {
 	Responses []string
-	Calls     []Request
-	i         int
+	// Route returns the response for a request, or "" to fall back to Responses.
+	Route func(Request) string
+	Calls []Request
+	i     int
 }
 
 func (f *Fake) Provider() string { return ProviderFake }
 
 func (f *Fake) Generate(_ context.Context, req Request) (Response, error) {
 	f.Calls = append(f.Calls, req)
+
+	if f.Route != nil {
+		if text := f.Route(req); text != "" {
+			return Response{Text: text, Model: "fake-1"}, nil
+		}
+	}
+
 	text := `{}`
 	if len(f.Responses) > 0 {
 		if f.i < len(f.Responses) {

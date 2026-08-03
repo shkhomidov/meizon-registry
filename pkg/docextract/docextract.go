@@ -44,6 +44,31 @@ const PageBreak = "\f"
 // firing the day the wording changes.
 var ErrNoTextLayer = errors.New("the PDF has no text layer (it looks scanned)")
 
+// Sanitize strips characters that extracted text may legally contain but
+// PostgreSQL cannot store, and must be applied to every string leaving this
+// package.
+//
+// NUL is the one that bites: PDF text layers carry it routinely, json.Marshal
+// encodes it as a JSON NUL escape, and jsonb then rejects the whole document
+// with SQLSTATE 22P05 — which is how a fully generated framework was lost
+// after the pipeline had already paid for OCR and every LLM call. Postgres
+// text columns reject NUL too, so this is not specific to the jsonb payload.
+//
+// Invalid UTF-8 is handled in the same pass because the documents that produce
+// one generally produce the other, and Postgres requires valid UTF-8 as well.
+// Both substitutions are lossy by design: neither is meaningful content, and
+// silently dropping them beats failing the write minutes later.
+func Sanitize(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\x00", "")
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "")
+	}
+	return s
+}
+
 // minCharsPerPage is the usable-text threshold. A scanned page is rarely empty
 // — a letterhead, a page number or a stamp often yields a few stray glyphs — so
 // "length > 0" would keep OCR from ever running on exactly the documents that
@@ -124,7 +149,8 @@ func Extract(filename string, data []byte) (string, error) {
 	}
 
 	var text string
-	if isPDF(filename, data) {
+	switch {
+	case isPDF(filename, data):
 		extracted, err := extractPDF(data)
 		if err != nil {
 			return "", fmt.Errorf("cannot read PDF (try pasting the text instead): %w", err)
@@ -133,11 +159,22 @@ func Extract(filename string, data []byte) (string, error) {
 			return "", ErrNoTextLayer
 		}
 		text = extracted
-	} else {
-		if !utf8.Valid(data) {
-			return "", fmt.Errorf("the document is not valid UTF-8 text; upload a PDF or paste the text")
+	case isSpreadsheet(filename):
+		// Excel/CSV are binary or non-UTF-8, so they cannot go through the text
+		// branch below — they are flattened to labelled text first, then
+		// sanitized like everything else.
+		flat, err := extractSpreadsheet(filename, data)
+		if err != nil {
+			return "", err
 		}
-		text = string(data)
+		text = Sanitize(flat)
+	default:
+		if !utf8.Valid(data) {
+			return "", fmt.Errorf("the document is not valid UTF-8 text; upload a PDF, Excel, CSV, or paste the text")
+		}
+		// Valid UTF-8 still permits NUL, so a .txt/.json upload needs the same
+		// treatment as a PDF. (extractPDF sanitizes its own output.)
+		text = Sanitize(string(data))
 	}
 
 	// Trim surrounding blank space but NOT page breaks: a leading/trailing empty
@@ -181,6 +218,8 @@ func extractPDF(data []byte) (string, error) {
 		pages = append(pages, content)
 	}
 	// Join with a form-feed so the reviewer UI can show one page at a time while
-	// the model still receives the whole text.
-	return strings.Join(pages, PageBreak), nil
+	// the model still receives the whole text. Sanitized here rather than at each
+	// caller: this is the only place PDF bytes become strings, so it is the one
+	// place a NUL can enter.
+	return Sanitize(strings.Join(pages, PageBreak)), nil
 }

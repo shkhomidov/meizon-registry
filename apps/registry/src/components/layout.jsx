@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   LibraryBig, Users, KeyRound, Ticket, ScrollText, ShieldCheck, GitCompareArrows,
-  Settings2, Sun, Moon, PanelLeftClose, PanelLeftOpen, ChevronDown, LogOut, Activity } from 'lucide-react'
+  Settings2, Building2, Sun, Moon, PanelLeftClose, PanelLeftOpen, ChevronDown, LogOut, Activity } from 'lucide-react'
 import { useSession } from '../context/SessionContext.jsx'
 import { useTheme } from '../hooks/useTheme.js'
 import { Avatar } from './ui.jsx'
@@ -65,6 +65,7 @@ function Sidebar({ collapsed, onToggle }) {
               <NavRow to="/admin/users" icon={Users} label="Users & roles" collapsed={collapsed} child />
               <NavRow to="/admin/keys" icon={KeyRound} label="Signing keys" collapsed={collapsed} child />
               <NavRow to="/admin/tokens" icon={Ticket} label="Distribution tokens" collapsed={collapsed} child />
+              <NavRow to="/admin/organizations" icon={Building2} label="Organizations" collapsed={collapsed} child />
               <NavRow to="/admin/settings" icon={Settings2} label="Settings" collapsed={collapsed} child />
             </SubMenu>
             <NavRow to="/audit" icon={ScrollText} label="Audit log" collapsed={collapsed} />
