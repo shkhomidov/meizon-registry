@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Send, Check, X, Archive, UploadCloud, ListChecks, History, Info, GitBranch, Download } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Archive, UploadCloud, ListChecks, History, Info, GitBranch, Download, ClipboardCheck } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { useSession, canApprove, canAuthor } from '../context/SessionContext.jsx'
 import StructureTree from '../components/StructureTree.jsx'
@@ -68,6 +68,8 @@ export default function FrameworkDetail() {
       <Button variant="ghost" icon={Download}
         onClick={() => api.downloadFramework(ref).catch((e) => setError(e.message))}>Download JSON</Button>
       {canAuthor(viewer) && <Button variant="ghost" icon={GitBranch} onClick={() => navigate(`/frameworks/${ref}/new-version`)}>New version from document</Button>}
+      {/* Audit templates are built from published requirements. */}
+      {status === 'PUBLISHED' && canAuthor(viewer) && <Button variant="ghost" icon={ClipboardCheck} onClick={() => navigate(`/frameworks/${ref}/qa`)}>Audit template</Button>}
       {draft && canAuthor(viewer) && <Button variant="ghost" icon={Send} onClick={() => act(() => api.submit(ref))}>Submit for review</Button>}
       {status === 'IN_REVIEW' && canApprove(viewer) && <Button icon={Check} onClick={() => act(() => api.approve(ref, 'approved via console'))}>Approve</Button>}
       {/* A reviewer needs a way to say no. Without it the only options were

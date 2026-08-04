@@ -50,6 +50,8 @@ const (
 	SourceDocumentEntityType          uint16 = 26
 	IngestJobEntityType               uint16 = 27
 	MappingSetEntityType              uint16 = 28
+	QATemplateEntityType              uint16 = 29
+	QAQuestionEntityType              uint16 = 30
 )
 
 // NewEntityFromID returns a zero-valued entity of the type encoded in id, and
@@ -106,6 +108,10 @@ func NewEntityFromID(id gid.GID) (any, bool) {
 		return &IngestJob{ID: id}, true
 	case MappingSetEntityType:
 		return &MappingSet{ID: id}, true
+	case QATemplateEntityType:
+		return &QATemplate{ID: id}, true
+	case QAQuestionEntityType:
+		return &QAQuestion{ID: id}, true
 	default:
 		return nil, false
 	}

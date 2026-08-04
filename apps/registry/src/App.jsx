@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react'
 import SignIn from './pages/SignIn.jsx'
 import Frameworks from './pages/Frameworks.jsx'
 import FrameworkDetail from './pages/FrameworkDetail.jsx'
+import QATemplate from './pages/QATemplate.jsx'
 import GenerateFramework from './pages/GenerateFramework.jsx'
 import Coverage from './pages/Coverage.jsx'
 import Jobs from './pages/Jobs.jsx'
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/frameworks/generate" element={<GenerateFramework />} />
         <Route path="/frameworks/:ref/new-version" element={<GenerateFramework />} />
         <Route path="/frameworks/:ref" element={<FrameworkDetail />} />
+        <Route path="/frameworks/:ref/qa" element={<QATemplate />} />
         <Route path="/coverage" element={<Coverage />} />
         <Route path="/jobs" element={<Jobs />} />
         {isSuper && <Route path="/audit" element={<Audit />} />}
