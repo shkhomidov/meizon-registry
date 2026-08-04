@@ -528,3 +528,208 @@ know why:
 Everything scored or cross-referenced should still key off frameworks + mappings
 (the signed source of truth); QA and translations enrich them for a localized,
 audit-ready import.
+
+---
+
+## Before you start (deployment-specific)
+
+Three values are per-deployment and must be supplied to any integration:
+
+| Value | Example | Where from |
+|---|---|---|
+| **Base URL** | `https://framework.yourco.com` | your registry operator |
+| **Bearer token** | `mzt_…` | a superadmin issues it (`registryctl token issue`) |
+| **Pinned public key(s)** | `reg-2026:<base64-ed25519>` | delivered **out of band**, never trust a key served next to the content it signs |
+
+Everything else in this guide (paths, shapes, semantics) is stable across
+deployments.
+
+---
+
+## Appendix A — Canonicalization & signature (byte-exact)
+
+A framework **bundle** and a **mapping set** are each signed the same way. To
+verify (or to reproduce `contentHash`) you must build the *exact same canonical
+bytes* the registry signed. The algorithm is intentionally simple but the details
+matter — a single differing byte fails the hash.
+
+### The canonical form
+
+Given the document object (bundle or mapping set):
+
+1. **Remove the `signature` field entirely** — not set to `null`, *absent*. (The
+   registry marshals the struct with `signature` omitted, so the key does not
+   appear.)
+2. Serialize to JSON with these exact rules (this is what Go's `encoding/json`
+   produces after a round-trip through a generic map):
+   - **Object keys sorted** ascending by UTF-8 byte order, at every nesting level.
+   - **Compact** — no spaces, no newlines between tokens.
+   - **HTML-escaped**: Go's `encoding/json` escapes the three HTML-sensitive
+     characters `<`, `>`, `&` (code points U+003C, U+003E, U+0026) to their
+     six-character JSON unicode-escape form (backslash-`u003c`, backslash-`u003e`,
+     backslash-`u0026`). *(If your JSON library does not do this, enable HTML
+     escaping or post-process; otherwise your bytes differ and the hash fails.)*
+   - Other non-ASCII is emitted as raw UTF-8 (not `\u`-escaped); standard JSON
+     escaping applies to control characters and the `"` and `\` characters.
+   - Numbers use the shortest round-trippable form (integers with no decimal
+     point). Numeric values pass through IEEE-754 `float64` during normalization.
+   - `omitempty` fields that are empty/zero are **absent** from the output.
+3. `contentHash = "sha256:" + lowercase_hex( sha256( canonical_bytes ) )`.
+4. The signature value is `base64_standard( ed25519_sign( privateKey,
+   canonical_bytes ) )` — a **detached** signature over the canonical bytes (not
+   over the hash).
+
+### To verify
+
+```
+1. pub = pinnedKeys[ document.signature.keyId ]      # else: reject (unknown key)
+2. require document.signature.alg == "ed25519"
+3. canonical = canonicalize(document without signature)   # steps 1–2 above
+4. require "sha256:"+hex(sha256(canonical)) == document.signature.contentHash
+                                                     # else: reject (tampering)
+5. require ed25519.Verify(pub, canonical, base64decode(document.signature.value))
+                                                     # else: reject (bad signature)
+```
+
+Only step 5's success means the document is authentic **and** untampered. Never
+import a document that fails any step. The **seed**, **QA template**, and
+**translated overlays** are unsigned by design — verify the framework **bundle**
+they derive from, then trust the derived shapes.
+
+> **Practical note.** Reproducing Go's `encoding/json` output exactly in another
+> language is the only hard part (key sorting + HTML-escaping + compaction). If in
+> doubt, verify with the reference implementation
+> (`registryctl verify --file <bundle> --pubkey <keyId:base64>`), or port
+> `pkg/fwschema/canonical.go` (≈15 lines): marshal → unmarshal into a generic map
+> → marshal again.
+
+---
+
+## Appendix B — Audit template schema & `when` grammar (`meizon-qa-template/v1`)
+
+Enough to render an audit and score answers deterministically.
+
+### B.1 Shape
+
+```
+Template
+├─ $schema: "meizon-qa-template/v1"
+├─ id, title, description?
+├─ framework: { id, version?, language? }
+├─ generatedBy?, model?, generatedAt?
+├─ scale?:        { kind, levels: [ { value:int, label } ] }
+├─ verdictModel?: { verdicts[], scoreOf{verdict→number|null},
+│                   requirementRollup?, notApplicablePolicy? }
+├─ defaults?:     { required?, weight?, allowNotApplicable?, evidenceTypes[]? }
+└─ sections: [ Section ]
+
+Section = { ref, name, order:int, questions: [ Question ] }
+```
+
+### B.2 Question
+
+```
+Question
+├─ id                    unique within the template; flow targets address it
+├─ order:int            unique within its section (ask in this order)
+├─ requirementRef       binds the question to a framework requirement (STABLE
+│                       across languages — join on this, not id)
+├─ controlRef?
+├─ text, intent?        the question, and a one-line hint
+├─ type                 one of the 11 types below
+├─ required?, weight?:int
+├─ conditional?:bool    true ⇒ only reached via a follow-up (skip in the main run)
+├─ expectedEvidence?[]  evidence hints
+├─ assessment?          how an answer → verdict (B.4)
+└─ followUps?[]         branching (B.5)
+```
+
+### B.3 The 11 types and their type-specific fields
+
+| `type` | Answer shape | Extra fields |
+|---|---|---|
+| `yes_no` | `"yes"` / `"no"` | — |
+| `yes_no_na` | `"yes"` / `"no"` / `"na"` | — |
+| `yes_no_evidence` | yes/no + evidence | `expectedEvidence[]` |
+| `single_choice` | one option `value` | `options:[{value,label}]` |
+| `multi_choice` | list of `value`s | `options[]`, `minSelections?:int` |
+| `scale` | an integer level | `scaleRef?` (a `scale.kind`); rubric in `assessment.rubric` |
+| `numeric` | a number | `unit?`, `min?`, `max?` (thresholds in `assessment.thresholds`) |
+| `date` | a date | thresholds may use `ageDays` |
+| `evidence` | evidence items | `evidenceTypes?[]`, `minEvidence?:int` |
+| `attestation` | signed statement | `attestation:{ statement, requireSignatory? }` |
+| `free_text` | text | `placeholder?`, `maxLength?:int` |
+
+> **Values are machine-meaningful, labels are display.** `options[].value` and the
+> literals in `when` expressions are identical across languages; only `label`,
+> `text`, `intent`, criteria, etc. are translated.
+
+### B.4 Assessment → verdict → score
+
+```
+assessment = {
+  criteria?: string,                       # human description
+  rules?:      [ { when, verdict } ],       # ordered; FIRST match wins
+  thresholds?: [ { when, verdict } ],       # same shape, for numeric/date
+  rubric?:     [ { level:int, descriptor } ]# scale descriptors
+}
+```
+
+- **Verdicts** (closed set): `compliant`, `partial`, `non_compliant`,
+  `not_applicable`.
+- Evaluate `rules` (then `thresholds`) in order; the first whose `when` is true
+  yields the question's verdict.
+- **Scoring** via `verdictModel`: `scoreOf` maps each verdict to a number, or
+  `null` to exclude it. A requirement's score is the `requirementRollup`
+  (`weighted_mean` by question `weight`) of its questions' scores.
+  `notApplicablePolicy` is `exclude` (drop `not_applicable` from the mean) or
+  `zero`.
+
+### B.5 Follow-ups (branching)
+
+```
+followUps: [ { when, askId? , skipTo? } ]   # exactly one of askId / skipTo
+```
+
+When `when` is true after answering: `askId` inserts that (conditional) question
+next; `skipTo` jumps ahead to that question. Targets are question `id`s in the
+same template.
+
+### B.6 The `when` expression language
+
+A tiny, fixed, side-effect-free grammar — **no arbitrary code**. Evaluated after a
+question is answered.
+
+**Variables** (type):
+
+| Variable | Type | Meaning |
+|---|---|---|
+| `answer` | string | the raw answer (`'yes'`, a choice value, …) |
+| `verdict` | string | the verdict this question just resolved to |
+| `score` | number | this question's score |
+| `value` | number | numeric-question value |
+| `ageDays` | number | age of a date answer, in days |
+| `evidence.count` | number | evidence items provided |
+| `selected.count` | number | choices selected (multi_choice) |
+| `selected` | list | the selected choice values |
+| `attested` | bool | attestation signed |
+| `true` / `false` | bool | literals |
+
+**Operators**: `==` `!=` `<` `<=` `>` `>=` `&&` `||`, plus `in` (membership) and
+`superset` (list ⊇ list). Comparisons coerce: numeric if both sides look numeric,
+else string. String literals use single quotes; lists use `[ … ]`.
+
+**Examples**
+
+```
+answer == 'no'
+verdict == 'partial' || score < 0.5
+selected.count >= 2 && 'mfa' in selected
+selected superset ['fw','ids','edr']
+value > 90
+ageDays > 365
+attested == true
+```
+
+An expression referencing any variable not in the table above is rejected at
+generation/edit time, so a stored template's expressions are always evaluable.
