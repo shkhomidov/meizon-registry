@@ -4,6 +4,11 @@ How a GRC platform (or any consumer) pulls frameworks out of the Meizon
 Framework Registry and keeps them current. For running the registry itself see
 [INSTALL-PRODUCTION.md](INSTALL-PRODUCTION.md).
 
+> For the **complete** integration guide — cross-mappings, audit (QA) templates,
+> translations, and the keep-current model for each — see
+> [GRC-INTEGRATION.md](GRC-INTEGRATION.md). This page is the framework-only quick
+> start.
+
 Base path: **`/api/registry/v1`**. Read-only, bearer-token authenticated,
 region-scoped, ETag-aware. Served by the same origin and port as the console.
 
@@ -143,11 +148,11 @@ Drain by looping while `hasMore` is true, passing the previous `nextSeq`.
 `mapping_published`, `mapping_deprecated`. Treat unknown kinds as ignorable
 rather than an error — the set will grow.
 
-> **Known gap:** the stored event carries `target_framework_ref` and
-> `target_version` for mapping events, but `ChangeEvent` does not expose them.
-> A consumer therefore sees that *a* mapping was published without learning what
-> it points at, and must re-fetch the source framework to find out. Do not build
-> incremental mapping sync on this feed until those fields are serialised.
+**Mapping events carry their target.** A `mapping_published` /
+`mapping_deprecated` event serialises `targetFramework` and `targetVersion` (in
+addition to the source in `framework`/`version`), so incremental mapping sync is
+built straight off this feed — no framework re-scan needed. See
+[GRC-INTEGRATION.md §4.3](GRC-INTEGRATION.md#43-how-a-mapping-change-reaches-you).
 
 ### `GET /frameworks/{id}`
 
