@@ -167,6 +167,92 @@ func (s *Service) AutoStartQATemplate(ctx context.Context, actorID gid.GID, fram
 	s.startQATemplateJobForVersion(ctx, actorID, client, setting, frameworkRef, versionID, doc)
 }
 
+// AppendQATemplateQuestions generates audit questions for a single requirement
+// and merges them into the framework's existing audit template — the incremental
+// counterpart to full generation, run when a requirement is added manually so the
+// template does not fall out of sync with the structure. It is best-effort: it
+// no-ops (and logs) rather than failing the caller when there is no LLM, no
+// template yet, or the requirement is already covered. Existing questions and
+// their edits are preserved; only the new requirement's questions are added.
+func (s *Service) AppendQATemplateQuestions(ctx context.Context, actorID gid.GID, frameworkRef, requirementRef string) {
+	if strings.TrimSpace(requirementRef) == "" {
+		return
+	}
+	client, _, err := s.ingestPreflight(ctx, actorID)
+	if err != nil {
+		return // no LLM configured — the requirement is covered when one generates
+	}
+
+	row, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+	if err != nil {
+		return // no template yet — nothing to append to
+	}
+	for _, q := range tpl.AllQuestions() {
+		if q.RequirementRef == requirementRef {
+			return // already covered (idempotent — a re-add or retry is a no-op)
+		}
+	}
+
+	// Locate the requirement (its name/description/category) in the current doc.
+	doc, err := s.ExportFlat(ctx, frameworkRef)
+	if err != nil {
+		return
+	}
+	var target *fwflat.Requirement
+	for i := range doc.Requirements {
+		if doc.Requirements[i].Ref == requirementRef {
+			target = &doc.Requirements[i]
+			break
+		}
+	}
+	if target == nil {
+		return
+	}
+
+	// Generate for just this requirement; synthesize a baseline if the model is
+	// unhelpful, so the requirement never ends up silent.
+	gqs := s.reaskOne(ctx, client, *target)
+	if len(gqs) == 0 {
+		gqs = []qaGenQuestion{synthesizedQuestion(*target)}
+	}
+
+	// Place the questions in the requirement's category section, creating it if
+	// the manual add introduced a new category.
+	secRef := target.Category
+	if secRef == "" {
+		secRef = "_uncategorized"
+	}
+	var sec *fwqa.Section
+	for i := range tpl.Sections {
+		if tpl.Sections[i].Ref == secRef {
+			sec = &tpl.Sections[i]
+			break
+		}
+	}
+	if sec == nil {
+		name, order := secRef, len(tpl.Sections)+1
+		for i, c := range doc.Categories {
+			if c.Ref == secRef {
+				name, order = c.Name, i+1
+				break
+			}
+		}
+		tpl.Sections = append(tpl.Sections, fwqa.Section{Ref: secRef, Name: name, Order: order})
+		sec = &tpl.Sections[len(tpl.Sections)-1]
+	}
+	sec.Questions = append(sec.Questions, buildRequirementQuestions(requirementRef, len(sec.Questions), gqs)...)
+
+	if err := tpl.Validate(); err != nil {
+		s.logger.WarnCtx(ctx, "appended QA questions failed validation, not saving: "+err.Error())
+		return
+	}
+	// Preserve the template's status — appending to a ready template keeps it
+	// ready; the reviewer can re-check the added questions.
+	if _, err := s.persistQATemplate(ctx, row.FrameworkVersionID, tpl, row.Status); err != nil {
+		s.logger.WarnCtx(ctx, "cannot persist appended QA questions: "+err.Error())
+	}
+}
+
 // runQAGeneration walks the requirements in batches, asks the model per batch,
 // guarantees every requirement ends up with at least one question, assembles a
 // validated fwqa.Template and persists it. It returns a coverage report of what
@@ -212,7 +298,7 @@ func (s *Service) runQAGeneration(ctx context.Context, jobID string, client llm.
 	if err := tpl.Validate(); err != nil {
 		return gid.Nil, nil, fmt.Errorf("generated template failed validation: %w", err)
 	}
-	templateID, err := s.persistQATemplate(ctx, versionID, tpl)
+	templateID, err := s.persistQATemplate(ctx, versionID, tpl, coredata.QATemplateStatusDraft)
 	if err != nil {
 		return gid.Nil, nil, err
 	}
@@ -323,37 +409,7 @@ func (s *Service) assembleQATemplate(frameworkRef string, doc *fwflat.Framework,
 			secRef = "_uncategorized"
 		}
 		sec := ensureSection(secRef)
-		gqs := byReq[req.Ref]
-		base := len(sec.Questions) // question orders continue across a section
-
-		// Build this requirement's questions first, then reconcile the follow-up
-		// wiring against them, so a branch can only target a sibling question.
-		built := make([]fwqa.Question, 0, len(gqs))
-		qid := func(idx1 int) string { return fmt.Sprintf("q-%s-%d", req.Ref, idx1) }
-		for i, gq := range gqs {
-			qtype := gq.Type
-			if !fwqa.KnownTypes[qtype] {
-				// Never trust an unknown type from the model; a free-text
-				// fallback is always answerable and always scoreable manually.
-				qtype = fwqa.TypeFreeText
-			}
-			built = append(built, fwqa.Question{
-				ID:               qid(i + 1),
-				Order:            base + i + 1,
-				RequirementRef:   req.Ref,
-				Text:             docextract.Sanitize(gq.Text),
-				Intent:           docextract.Sanitize(gq.Intent),
-				Type:             qtype,
-				Weight:           gq.Weight,
-				Conditional:      gq.Conditional,
-				ExpectedEvidence: sanitizeSlice(gq.ExpectedEvidence),
-				Options:          gq.Options,
-				Assessment:       sanitizeAssessment(gq.Assessment),
-				FollowUps:        resolveFollowUps(req.Ref, i, gqs),
-			})
-		}
-		reconcileConditionals(built)
-		sec.Questions = append(sec.Questions, built...)
+		sec.Questions = append(sec.Questions, buildRequirementQuestions(req.Ref, len(sec.Questions), byReq[req.Ref])...)
 	}
 
 	out := &fwqa.Template{
@@ -374,6 +430,40 @@ func (s *Service) assembleQATemplate(frameworkRef string, doc *fwflat.Framework,
 		out.Sections = append(out.Sections, *sec)
 	}
 	return out
+}
+
+// buildRequirementQuestions turns the model's questions for one requirement into
+// ordered fwqa questions: deterministic ids (q-<ref>-N), follow-up wiring resolved
+// to sibling ids, unknown types coerced to free_text, and orphan conditionals
+// demoted. base is the count of questions already in the target section, so
+// orders continue across it. Shared by full generation and the incremental
+// append when a requirement is added manually.
+func buildRequirementQuestions(reqRef string, base int, gqs []qaGenQuestion) []fwqa.Question {
+	built := make([]fwqa.Question, 0, len(gqs))
+	for i, gq := range gqs {
+		qtype := gq.Type
+		if !fwqa.KnownTypes[qtype] {
+			// Never trust an unknown type from the model; a free-text fallback is
+			// always answerable and always scoreable manually.
+			qtype = fwqa.TypeFreeText
+		}
+		built = append(built, fwqa.Question{
+			ID:               fmt.Sprintf("q-%s-%d", reqRef, i+1),
+			Order:            base + i + 1,
+			RequirementRef:   reqRef,
+			Text:             docextract.Sanitize(gq.Text),
+			Intent:           docextract.Sanitize(gq.Intent),
+			Type:             qtype,
+			Weight:           gq.Weight,
+			Conditional:      gq.Conditional,
+			ExpectedEvidence: sanitizeSlice(gq.ExpectedEvidence),
+			Options:          gq.Options,
+			Assessment:       sanitizeAssessment(gq.Assessment),
+			FollowUps:        resolveFollowUps(reqRef, i, gqs),
+		})
+	}
+	reconcileConditionals(built)
+	return built
 }
 
 // resolveFollowUps turns the model's index-based branches for the question at
@@ -437,8 +527,11 @@ func defaultVerdictModel() *fwqa.VerdictModel {
 }
 
 // persistQATemplate writes the template row and replaces its questions in one
-// transaction, marking it ready.
-func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl *fwqa.Template) (gid.GID, error) {
+// transaction. status is the row's status to store — draft for a fresh
+// generation, or the preserved status when re-saving after an incremental
+// append. UpsertTemplate conflicts on framework_version_id, so re-saving adopts
+// the existing row rather than creating a second template for the version.
+func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl *fwqa.Template, status string) (gid.GID, error) {
 	var templateID gid.GID
 	err := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
 		scope := s.platformScope()
@@ -452,7 +545,7 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 			FrameworkVersionID: versionID,
 			FrameworkRef:       tpl.Framework.ID,
 			Title:              tpl.Title,
-			Status:             coredata.QATemplateStatusDraft,
+			Status:             status,
 			GeneratedBy:        tpl.GeneratedBy,
 			Model:              tpl.Model,
 			Scale:              scaleJSON,
@@ -474,12 +567,43 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 // qaQuestionRows flattens a template to storable rows, stripping the structural
 // fields into columns and leaving the rest as the body.
 func qaQuestionRows(templateID gid.GID, tenant gid.TenantID, tpl *fwqa.Template, now time.Time) coredata.QAQuestions {
+	// A question is authored with a schema id ("q-<ref>-N") and its follow-ups
+	// target siblings by that same schema id, but the persisted row is addressed
+	// by a DB gid, and reconstructTemplate re-stamps the question id from that
+	// gid. Assign the gids up front and rewrite every id — including follow-up
+	// askId/skipTo — to them, so a reloaded template with branches still resolves
+	// and validates. (Reloading an existing template to append re-enters here with
+	// gid-string ids; those are simply remapped to fresh gids the same way.)
+	idFor := map[string]gid.GID{}
+	for _, sec := range tpl.Sections {
+		for _, q := range sec.Questions {
+			idFor[q.ID] = gid.New(tenant, coredata.QAQuestionEntityType)
+		}
+	}
+	remap := func(id string) string {
+		if g, ok := idFor[id]; ok {
+			return g.String()
+		}
+		return id
+	}
+
 	var rows coredata.QAQuestions
 	for _, sec := range tpl.Sections {
 		for _, q := range sec.Questions {
-			body, _ := json.Marshal(q)
+			dbID := idFor[q.ID]
+			stored := q
+			stored.ID = dbID.String()
+			if len(q.FollowUps) > 0 {
+				stored.FollowUps = make([]fwqa.FollowUp, len(q.FollowUps))
+				for i, f := range q.FollowUps {
+					f.AskID = remap(f.AskID)
+					f.SkipTo = remap(f.SkipTo)
+					stored.FollowUps[i] = f
+				}
+			}
+			body, _ := json.Marshal(stored)
 			rows = append(rows, &coredata.QAQuestion{
-				ID:             gid.New(tenant, coredata.QAQuestionEntityType),
+				ID:             dbID,
 				TemplateID:     templateID,
 				SectionRef:     sec.Ref,
 				SectionName:    sec.Name,

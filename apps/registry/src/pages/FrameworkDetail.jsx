@@ -142,7 +142,8 @@ export default function FrameworkDetail() {
       />
 
       {tab === 'structure' && (
-        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer)} onChanged={load}
+        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer)}
+          onChanged={() => { load(); loadQA() }}
           qaByReq={indexByRequirement(qa)} qaTemplateId={qa?.templateId} qaEditable={canAuthor(viewer)} onQuestionChanged={loadQA} />
       )}
 

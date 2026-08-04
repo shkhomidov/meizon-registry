@@ -59,7 +59,7 @@ export default function QATab({ refId, template, editable, onChanged }) {
       <div className="space-y-3">
         {error && <div className="text-st-red text-[12.5px]">{error}</div>}
         <EmptyState icon={ListChecks} title="No audit template yet"
-          hint="Generate the audit questions from this version's requirements. This normally runs automatically right after a framework is generated.">
+          hint="Generate the audit questions from this version's requirements. This normally runs automatically when a framework is created, if an LLM is configured.">
           {editable && <Button icon={Sparkles} onClick={generate} busy={busy}>Generate audit template</Button>}
         </EmptyState>
       </div>

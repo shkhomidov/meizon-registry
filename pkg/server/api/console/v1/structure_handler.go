@@ -81,6 +81,10 @@ func (h *Handler) addRequirement(w http.ResponseWriter, r *http.Request) {
 		httpx.ServiceError(w, err)
 		return
 	}
+	// A manually added requirement must not leave the audit template stale:
+	// generate its questions and merge them in. Best-effort and synchronous, so
+	// the questions are already present when the console reloads the template.
+	h.svc.AppendQATemplateQuestions(r.Context(), actor, chi.URLParam(r, "ref"), body.Code)
 	httpx.JSON(w, http.StatusCreated, map[string]bool{"ok": true})
 }
 
