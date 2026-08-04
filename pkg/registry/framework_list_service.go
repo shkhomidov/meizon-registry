@@ -21,6 +21,7 @@ import (
 	"go.gearno.de/kit/pg"
 	"go.meizon.cloud/registry/pkg/coredata"
 	"go.meizon.cloud/registry/pkg/gid"
+	"go.meizon.cloud/registry/pkg/iam"
 )
 
 // FrameworkListItem is the Frameworks page row: the framework plus the
@@ -56,14 +57,25 @@ type FrameworkListItem struct {
 // Assembled in one pass rather than per-row lookups: the page is a list, and a
 // query per framework would turn a 2-row page into a dozen round trips the
 // moment the registry grows.
-func (s *Service) FrameworkList(ctx context.Context) ([]FrameworkListItem, error) {
+func (s *Service) FrameworkList(ctx context.Context, actorID gid.GID) ([]FrameworkListItem, error) {
 	out := []FrameworkListItem{}
 
 	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
 		scope := s.platformScope()
 
+		// Auditors see only the frameworks they created; moderators and
+		// superadmins see the whole catalog.
+		principal, err := s.principalFor(ctx, conn, actorID)
+		if err != nil {
+			return err
+		}
+
 		var frameworks coredata.Frameworks
-		if err := frameworks.LoadAll(ctx, conn, scope); err != nil {
+		if principal.Role == iam.RoleAuditor {
+			if err := frameworks.LoadAllOwnedBy(ctx, conn, scope, actorID); err != nil {
+				return err
+			}
+		} else if err := frameworks.LoadAll(ctx, conn, scope); err != nil {
 			return err
 		}
 		if len(frameworks) == 0 {

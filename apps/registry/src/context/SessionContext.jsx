@@ -54,5 +54,8 @@ export function canApprove(viewer) {
 export function canAuthor(viewer) {
   return viewer && (viewer.role === 'auditor' || viewer.role === 'moderator' || viewer.role === 'superadmin')
 }
+export function isSuperAdmin(viewer) {
+  return viewer?.role === 'superadmin'
+}
 
 export { AuthError }

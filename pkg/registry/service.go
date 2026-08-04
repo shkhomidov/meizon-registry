@@ -151,6 +151,24 @@ func (s *Service) authorize(ctx context.Context, conn pg.Querier, actorID gid.GI
 	return nil
 }
 
+// EnsureFrameworkAccess enforces the auditor ownership rule: an auditor may only
+// see and manage the frameworks they created. Moderators and superadmins are
+// unrestricted (the action/region policy still applies at each operation). It is
+// the single ownership gate the console handlers call after resolving a framework
+// by reference.
+func (s *Service) EnsureFrameworkAccess(ctx context.Context, actorID gid.GID, framework coredata.Framework) error {
+	return s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
+		principal, err := s.principalFor(ctx, conn, actorID)
+		if err != nil {
+			return err
+		}
+		if principal.Role == iam.RoleAuditor && framework.CreatedBy != actorID {
+			return fmt.Errorf("%w: not the owner of framework %q", ErrForbidden, framework.ReferenceID)
+		}
+		return nil
+	})
+}
+
 // recordAudit appends an immutable audit entry.
 func (s *Service) recordAudit(ctx context.Context, conn pg.Querier, scope coredata.Scoper, actorID gid.GID, action, targetID, detail string) error {
 	entry := coredata.AuditLogEntry{

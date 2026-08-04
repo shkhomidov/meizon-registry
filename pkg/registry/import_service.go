@@ -75,6 +75,7 @@ func (s *Service) importFrameworkDoc(ctx context.Context, actorID gid.GID, doc *
 			License:        doc.License,
 			Description:    doc.Description,
 			SourceLanguage: doc.SourceLanguage,
+			CreatedBy:      actorID,
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}

@@ -41,7 +41,7 @@ var ModeratorPolicy = policy.NewPolicy(
 	"Registry Moderator",
 	policy.Allow(
 		ActionFrameworkCreate, ActionFrameworkEdit, ActionFrameworkSubmit,
-		ActionFrameworkGet, ActionFrameworkList, ActionFrameworkDelete,
+		ActionFrameworkGet, ActionFrameworkList,
 		ActionVersionReview, ActionVersionApprove, ActionVersionReject,
 		ActionVersionPublish, ActionVersionDeprecate,
 		ActionVersionGet, ActionVersionList,

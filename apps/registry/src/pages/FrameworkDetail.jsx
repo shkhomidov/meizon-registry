@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Send, Check, X, Archive, UploadCloud, ListChecks, History, Info, GitBranch, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Archive, UploadCloud, ListChecks, History, Info, GitBranch, Download, ClipboardCheck, Trash2 } from 'lucide-react'
 import { api } from '../lib/api.js'
-import { useSession, canApprove, canAuthor } from '../context/SessionContext.jsx'
+import { useSession, canApprove, canAuthor, isSuperAdmin } from '../context/SessionContext.jsx'
 import StructureTree from '../components/StructureTree.jsx'
 import LanguageBar from '../components/LanguageBar.jsx'
 import AutoMapPanel from '../components/AutoMapPanel.jsx'
@@ -98,6 +98,14 @@ export default function FrameworkDetail() {
             act(() => api.deprecate(ref))
           }
         }}>Deprecate</Button>
+      )}
+      {/* Delete is destructive and irreversible — superadmin only. */}
+      {isSuperAdmin(viewer) && (
+        <Button variant="ghost" icon={Trash2} onClick={() => {
+          if (window.confirm(`Permanently delete "${framework.name}" and ALL its versions, structure, mappings and audit templates? This cannot be undone.${status === 'PUBLISHED' ? ' It is PUBLISHED — consumers that imported it will lose it (deprecate instead to retire it gracefully).' : ''}`)) {
+            api.deleteFramework(ref).then(() => navigate('/')).catch((e) => setError(e.message))
+          }
+        }}>Delete</Button>
       )}
     </div>
   )

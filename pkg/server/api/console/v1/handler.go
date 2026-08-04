@@ -47,74 +47,85 @@ func (h *Handler) Routes() http.Handler {
 	r.Use(h.cookie.Middleware)
 	r.Use(requireSession)
 
+	// Framework-collection and non-framework routes (no {ref} to own-check).
 	r.Get("/frameworks", h.listFrameworks)
 	r.Post("/frameworks", h.createFramework)
 	r.Post("/frameworks/import", h.importFramework)
 	r.Post("/frameworks/generate", h.generateFramework)
 	r.Get("/frameworks/generate/status/{jobId}", h.generateStatus)
+	r.Post("/frameworks/generate/accept", h.acceptGeneratedFramework)
 	r.Get("/jobs", h.listJobs)
 	r.Post("/admin/translate-missing", h.translateMissing)
-	r.Post("/frameworks/generate/accept", h.acceptGeneratedFramework)
-	r.Post("/frameworks/{ref}/next-version/generate", h.generateNextVersion)
-	r.Post("/frameworks/{ref}/next-version/accept", h.acceptNextVersion)
-	r.Get("/frameworks/{ref}", h.getFramework)
-	r.Get("/frameworks/{ref}/export", h.exportFramework)
-	r.Get("/frameworks/{ref}/source", h.sourceDocument)
-	r.Get("/frameworks/{ref}/translations", h.translations)
-	r.Post("/frameworks/{ref}/translations", h.addTranslation)
-	r.Post("/frameworks/{ref}/controls", h.addControl)
-	r.Post("/frameworks/{ref}/submit", h.transition(transitionSubmit))
-	r.Post("/frameworks/{ref}/approve", h.transition(transitionApprove))
-	r.Post("/frameworks/{ref}/publish", h.transition(transitionPublish))
-	// Reject sends a submission back to DRAFT; deprecate retires a published
-	// version and is what tells consumers to stop using it. Both existed in the
-	// service with no way to reach them — a moderator could only ever say yes.
-	r.Post("/frameworks/{ref}/reject", h.transition(transitionReject))
-	r.Post("/frameworks/{ref}/deprecate", h.transition(transitionDeprecate))
-
-	// Universal hierarchy + cross-mappings (all UI-managed).
-	r.Get("/frameworks/{ref}/structure", h.getStructure)
-	r.Post("/frameworks/{ref}/categories", h.addCategory)
-	r.Post("/frameworks/{ref}/requirements", h.addRequirement)
-	r.Delete("/frameworks/{ref}/structure/{level}/{code}", h.deleteStructureNode)
-	r.Post("/frameworks/{ref}/items/{code}/mappings", h.addItemMapping)
-	r.Delete("/frameworks/{ref}/mappings/{id}", h.removeItemMapping)
 	r.Get("/coverage", h.coverage)
 	r.Get("/mappings", h.mappingsBetween)
-	r.Patch("/frameworks/{ref}/mappings/{id}", h.updateMapping)
-	r.Delete("/frameworks/{ref}/mappings/{id}/any", h.deleteMapping)
-
-	// LLM-assisted cross-mapping: the model proposes, the auditor decides.
-	r.Post("/frameworks/{ref}/automap", h.autoMap)
-	r.Get("/frameworks/{ref}/mapping-proposals", h.mappingProposals)
-	r.Post("/frameworks/{ref}/mapping-proposals/decide", h.decideProposals)
-
-	// AI-assisted authoring: the LLM proposes, the auditor decides.
 	r.Get("/ai/status", h.aiStatus)
-	r.Post("/frameworks/{ref}/ai/generate", h.aiGenerate)
-	r.Post("/frameworks/{ref}/ai/accept", h.aiAccept)
-
-	// QA audit templates: generate from published requirements, view/edit, and
-	// the shared answer evaluator the chat preview calls.
-	r.Post("/frameworks/{ref}/qa/generate", h.qaGenerate)
-	r.Get("/frameworks/{ref}/qa-template", h.qaTemplate)
-	r.Post("/frameworks/{ref}/qa/evaluate", h.qaEvaluate)
+	r.Get("/audit", h.audit)
+	// QA question/template edits are addressed by template id, not framework ref.
 	r.Patch("/qa-templates/{id}/questions/{qid}", h.qaUpdateQuestion)
 	r.Delete("/qa-templates/{id}/questions/{qid}", h.qaDeleteQuestion)
 	r.Post("/qa-templates/{id}/reorder", h.qaReorder)
 	r.Post("/qa-templates/{id}/status", h.qaSetStatus)
 
-	// Catalogs: control library, evidence guidance, policy templates.
-	r.Get("/frameworks/{ref}/controls-library", h.listControlLibrary)
-	r.Post("/frameworks/{ref}/controls-library", h.addControlEntry)
-	r.Delete("/frameworks/{ref}/controls-library/{id}", h.deleteControlEntry)
-	r.Post("/frameworks/{ref}/controls-library/{id}/evidence", h.addEvidence)
-	r.Delete("/frameworks/{ref}/evidence/{id}", h.deleteEvidence)
-	r.Get("/frameworks/{ref}/policy-templates", h.listPolicyTemplates)
-	r.Post("/frameworks/{ref}/policy-templates", h.upsertPolicyTemplate)
-	r.Delete("/frameworks/{ref}/policy-templates/{id}", h.deletePolicyTemplate)
+	// Everything scoped to a single framework by {ref} goes through the ownership
+	// gate: an auditor may see and manage only the frameworks they created;
+	// moderators and superadmins are unrestricted. One middleware covers every
+	// read and mutation so no handler can forget the check.
+	r.Group(func(r chi.Router) {
+		r.Use(h.requireFrameworkAccess)
 
-	r.Get("/audit", h.audit)
+		r.Delete("/frameworks/{ref}", h.deleteFramework)
+		r.Get("/frameworks/{ref}", h.getFramework)
+		r.Get("/frameworks/{ref}/export", h.exportFramework)
+		r.Get("/frameworks/{ref}/source", h.sourceDocument)
+		r.Post("/frameworks/{ref}/next-version/generate", h.generateNextVersion)
+		r.Post("/frameworks/{ref}/next-version/accept", h.acceptNextVersion)
+
+		r.Get("/frameworks/{ref}/translations", h.translations)
+		r.Post("/frameworks/{ref}/translations", h.addTranslation)
+		r.Post("/frameworks/{ref}/controls", h.addControl)
+
+		r.Post("/frameworks/{ref}/submit", h.transition(transitionSubmit))
+		r.Post("/frameworks/{ref}/approve", h.transition(transitionApprove))
+		r.Post("/frameworks/{ref}/publish", h.transition(transitionPublish))
+		// Reject sends a submission back to DRAFT; deprecate retires a published
+		// version and is what tells consumers to stop using it.
+		r.Post("/frameworks/{ref}/reject", h.transition(transitionReject))
+		r.Post("/frameworks/{ref}/deprecate", h.transition(transitionDeprecate))
+
+		// Universal hierarchy + cross-mappings (all UI-managed).
+		r.Get("/frameworks/{ref}/structure", h.getStructure)
+		r.Post("/frameworks/{ref}/categories", h.addCategory)
+		r.Post("/frameworks/{ref}/requirements", h.addRequirement)
+		r.Delete("/frameworks/{ref}/structure/{level}/{code}", h.deleteStructureNode)
+		r.Post("/frameworks/{ref}/items/{code}/mappings", h.addItemMapping)
+		r.Delete("/frameworks/{ref}/mappings/{id}", h.removeItemMapping)
+		r.Patch("/frameworks/{ref}/mappings/{id}", h.updateMapping)
+		r.Delete("/frameworks/{ref}/mappings/{id}/any", h.deleteMapping)
+
+		// LLM-assisted cross-mapping: the model proposes, the auditor decides.
+		r.Post("/frameworks/{ref}/automap", h.autoMap)
+		r.Get("/frameworks/{ref}/mapping-proposals", h.mappingProposals)
+		r.Post("/frameworks/{ref}/mapping-proposals/decide", h.decideProposals)
+
+		// AI-assisted authoring: the LLM proposes, the auditor decides.
+		r.Post("/frameworks/{ref}/ai/generate", h.aiGenerate)
+		r.Post("/frameworks/{ref}/ai/accept", h.aiAccept)
+
+		// QA audit templates.
+		r.Post("/frameworks/{ref}/qa/generate", h.qaGenerate)
+		r.Get("/frameworks/{ref}/qa-template", h.qaTemplate)
+		r.Post("/frameworks/{ref}/qa/evaluate", h.qaEvaluate)
+
+		// Catalogs: control library, evidence guidance, policy templates.
+		r.Get("/frameworks/{ref}/controls-library", h.listControlLibrary)
+		r.Post("/frameworks/{ref}/controls-library", h.addControlEntry)
+		r.Delete("/frameworks/{ref}/controls-library/{id}", h.deleteControlEntry)
+		r.Post("/frameworks/{ref}/controls-library/{id}/evidence", h.addEvidence)
+		r.Delete("/frameworks/{ref}/evidence/{id}", h.deleteEvidence)
+		r.Get("/frameworks/{ref}/policy-templates", h.listPolicyTemplates)
+		r.Post("/frameworks/{ref}/policy-templates", h.upsertPolicyTemplate)
+		r.Delete("/frameworks/{ref}/policy-templates/{id}", h.deletePolicyTemplate)
+	})
 
 	// Superadmin governance surface.
 	r.Route("/admin", func(ar chi.Router) {
@@ -333,8 +344,45 @@ func toFrameworkView(f *coredata.Framework) frameworkView {
 	}
 }
 
+// requireFrameworkAccess gates the /frameworks/{ref} subtree: it resolves the
+// framework and enforces the auditor ownership rule before any framework-scoped
+// handler runs. A missing ref (no route param) passes through; a missing
+// framework surfaces the not-found from the service.
+func (h *Handler) requireFrameworkAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ref := chi.URLParam(r, "ref")
+		if ref == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		framework, err := h.svc.FrameworkByReference(r.Context(), ref)
+		if err != nil {
+			httpx.ServiceError(w, err)
+			return
+		}
+		actor, _ := authn.IdentityFrom(r.Context())
+		if err := h.svc.EnsureFrameworkAccess(r.Context(), actor, framework); err != nil {
+			httpx.ServiceError(w, err)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// deleteFramework permanently removes a framework and everything under it.
+// Gated by ActionFrameworkDelete, which only superadmins hold.
+func (h *Handler) deleteFramework(w http.ResponseWriter, r *http.Request) {
+	actor, _ := authn.IdentityFrom(r.Context())
+	if err := h.svc.DeleteFramework(r.Context(), actor, chi.URLParam(r, "ref")); err != nil {
+		httpx.ServiceError(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (h *Handler) listFrameworks(w http.ResponseWriter, r *http.Request) {
-	frameworks, err := h.svc.FrameworkList(r.Context())
+	actor, _ := authn.IdentityFrom(r.Context())
+	frameworks, err := h.svc.FrameworkList(r.Context(), actor)
 	if err != nil {
 		httpx.ServiceError(w, err)
 		return

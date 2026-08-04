@@ -100,6 +100,7 @@ export const api = {
   addCategory: (ref, payload) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/categories`, { method: 'POST', body: payload }),
   addRequirement: (ref, payload) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/requirements`, { method: 'POST', body: payload }),
   deleteNode: (ref, level, code) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/structure/${level}/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+  deleteFramework: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}`, { method: 'DELETE' }),
   addMapping: (ref, itemCode, payload) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/items/${encodeURIComponent(itemCode)}/mappings`, { method: 'POST', body: payload }),
   removeMapping: (ref, id) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/mappings/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   importFramework: (doc) => request('/console/v1/frameworks/import', { method: 'POST', body: doc }),
