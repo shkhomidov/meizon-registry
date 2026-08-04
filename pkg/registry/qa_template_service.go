@@ -141,11 +141,11 @@ func (s *Service) startQATemplateJobForVersion(ctx context.Context, actorID gid.
 	jobID := gid.New(s.cfg.PlatformTenant, coredata.IngestJobEntityType).String()
 	s.startJobRecord(ctx, jobID, coredata.JobKindQATemplate, doc.Name, frameworkRef, actorID)
 
-	go func() {
+	go s.withLLMSlot(func() {
 		bg := context.Background()
 		templateID, report, gerr := s.runQAGeneration(bg, jobID, client, setting, frameworkRef, versionID, doc)
 		s.finishQAJob(bg, jobID, templateID, report, gerr)
-	}()
+	})
 
 	return jobID
 }

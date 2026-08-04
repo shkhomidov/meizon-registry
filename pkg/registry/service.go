@@ -76,7 +76,19 @@ type Service struct {
 	logger      *log.Logger
 	llmFactory  func(llm.Config) (llm.Client, error)
 	ingestJobs  *ingestJobRegistry
+	// llmSem bounds how many LLM-heavy background jobs (generation, QA templates,
+	// translation, auto-mapping) run at once. They all draw on the same model
+	// and its rate limit, so a burst of simultaneous generations must queue
+	// rather than fire in parallel and collect 429s. A background job is still
+	// started immediately and shown as running; it blocks here until a slot is
+	// free, so nothing is dropped.
+	llmSem chan struct{}
 }
+
+// maxConcurrentLLMJobs caps parallel LLM-heavy background work. Sized for a
+// single model's rate budget rather than the box's CPUs — the work is
+// network-bound on the provider, not local.
+const maxConcurrentLLMJobs = 4
 
 // NewService constructs the service.
 func NewService(db *pg.Client, hashProfile *passwdhash.Profile, cfg Config, logger *log.Logger) *Service {
@@ -94,7 +106,17 @@ func NewService(db *pg.Client, hashProfile *passwdhash.Profile, cfg Config, logg
 		logger:      logger.Named("registry"),
 		llmFactory:  llm.New,
 		ingestJobs:  newIngestJobRegistry(),
+		llmSem:      make(chan struct{}, maxConcurrentLLMJobs),
 	}
+}
+
+// withLLMSlot runs fn while holding one of the bounded LLM job slots, blocking
+// until a slot frees. Call it as the first thing inside a background job's
+// goroutine so a burst of jobs queues instead of overrunning the model.
+func (s *Service) withLLMSlot(fn func()) {
+	s.llmSem <- struct{}{}
+	defer func() { <-s.llmSem }()
+	fn()
 }
 
 func (s *Service) platformScope() *coredata.Scope {

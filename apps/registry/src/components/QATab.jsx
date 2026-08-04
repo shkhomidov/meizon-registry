@@ -3,7 +3,7 @@
 // template, toggles its draft/ready status, edits questions, and previews the
 // audit as a chat. The template is generated per framework VERSION (draft or
 // published) and lives beside the requirements it audits.
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sparkles, MessageSquare, ListChecks, Trash2, Save, CheckCircle2, Undo2 } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { Card, Button, Badge, Textarea, EmptyState, Tabs } from './ui.jsx'
@@ -37,6 +37,37 @@ export default function QATab({ refId, template, editable, language = '', onChan
   // translation is shown read-only (the canonical stays fully editable).
   const canEdit = editable && !language
 
+  // Audit templates generate asynchronously — on framework creation, or from a
+  // click here or in another tab. Without a signal, the empty tab looks like
+  // generation failed when it is simply still running. So while there is no
+  // template, poll the jobs list for THIS framework's running qa_template job
+  // and show its progress; when it finishes, reload the template in place.
+  const [genJob, setGenJob] = useState(null)
+  const prevJob = useRef(null)
+  useEffect(() => {
+    if (template) return // template present — nothing to wait for
+    let alive = true
+    const poll = async () => {
+      let job = null
+      try {
+        const jobs = await api.listJobs()
+        job = (jobs || []).find(
+          (j) => j.kind === 'qa_template' && j.status === 'running' && j.frameworkRef === refId,
+        ) || null
+      } catch {
+        return // transient; try again next tick
+      }
+      if (!alive) return
+      // Was running, now gone → it just completed; pull the fresh template.
+      if (prevJob.current && !job) onChanged?.()
+      prevJob.current = job
+      setGenJob(job)
+    }
+    poll()
+    const t = setInterval(poll, 2000)
+    return () => { alive = false; clearInterval(t) }
+  }, [refId, template, onChanged])
+
   async function generate() {
     setError(''); setBusy(true)
     try {
@@ -59,6 +90,40 @@ export default function QATab({ refId, template, editable, language = '', onChan
   }
 
   if (!template) {
+    // A job is generating this framework's audit template (auto on creation, or
+    // started elsewhere). Show live progress instead of an empty tab that reads
+    // as failure. `busy` is the local click-to-generate path, which polls itself.
+    const running = genJob || busy
+    if (running) {
+      const total = genJob?.total || 0
+      const current = genJob?.current || 0
+      const pct = total > 0 ? Math.round((Math.min(current, total) / total) * 100) : 0
+      return (
+        <div className="space-y-3">
+          {error && <div className="text-st-red text-[12.5px]">{error}</div>}
+          <Card className="p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[13px]">
+              <Sparkles size={15} className="text-sage animate-pulse" />
+              <span>Audit template generating…</span>
+              {total > 0 && (
+                <span className="text-muted font-mono text-[11.5px]">
+                  {current}/{total} requirements
+                </span>
+              )}
+            </div>
+            <div className="h-1 bg-inset rounded overflow-hidden">
+              <div
+                className="h-full bg-sage transition-[width] duration-300"
+                style={{ width: total > 0 ? `${pct}%` : '100%' }}
+              />
+            </div>
+            <div className="text-muted text-[11.5px]">
+              This runs in the background — you can leave this page and come back. Progress is also on the Jobs page.
+            </div>
+          </Card>
+        </div>
+      )
+    }
     return (
       <div className="space-y-3">
         {error && <div className="text-st-red text-[12.5px]">{error}</div>}
