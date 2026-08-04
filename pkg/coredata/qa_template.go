@@ -39,6 +39,7 @@ type (
 		ID                 gid.GID   `db:"id"`
 		FrameworkVersionID gid.GID   `db:"framework_version_id"`
 		FrameworkRef       string    `db:"framework_ref"`
+		Language           string    `db:"language"` // "" = canonical/source language
 		Title              string    `db:"title"`
 		Status             string    `db:"status"`
 		GeneratedBy        string    `db:"generated_by"`
@@ -70,7 +71,7 @@ type (
 	QAQuestions []*QAQuestion
 )
 
-const qaTemplateColumns = `id, framework_version_id, framework_ref, title, status, generated_by, model, scale, verdict_model, defaults, created_at, updated_at`
+const qaTemplateColumns = `id, framework_version_id, framework_ref, language, title, status, generated_by, model, scale, verdict_model, defaults, created_at, updated_at`
 const qaQuestionColumns = `id, template_id, section_ref, section_name, section_order, ord, requirement_ref, control_ref, type, body, created_at`
 
 // UpsertTemplate inserts a template or updates it on the unique framework
@@ -79,13 +80,13 @@ const qaQuestionColumns = `id, template_id, section_ref, section_name, section_o
 func (t *QATemplate) UpsertTemplate(ctx context.Context, conn pg.Tx, scope Scoper) error {
 	q := `
 INSERT INTO qa_templates (
-    tenant_id, id, framework_version_id, framework_ref, title, status, generated_by, model,
+    tenant_id, id, framework_version_id, framework_ref, language, title, status, generated_by, model,
     scale, verdict_model, defaults, created_at, updated_at
 ) VALUES (
-    @tenant_id, @id, @framework_version_id, @framework_ref, @title, @status, @generated_by, @model,
+    @tenant_id, @id, @framework_version_id, @framework_ref, @language, @title, @status, @generated_by, @model,
     @scale, @verdict_model, @defaults, @created_at, @updated_at
 )
-ON CONFLICT (framework_version_id) DO UPDATE SET
+ON CONFLICT (framework_version_id, language) DO UPDATE SET
     title = EXCLUDED.title, status = EXCLUDED.status, generated_by = EXCLUDED.generated_by,
     model = EXCLUDED.model, scale = EXCLUDED.scale, verdict_model = EXCLUDED.verdict_model,
     defaults = EXCLUDED.defaults, updated_at = EXCLUDED.updated_at
@@ -96,6 +97,7 @@ RETURNING id;`
 		"id":                   t.ID,
 		"framework_version_id": t.FrameworkVersionID,
 		"framework_ref":        t.FrameworkRef,
+		"language":             t.Language,
 		"title":                t.Title,
 		"status":               t.Status,
 		"generated_by":         t.GeneratedBy,
@@ -109,11 +111,12 @@ RETURNING id;`
 	return conn.QueryRow(ctx, q, args).Scan(&t.ID)
 }
 
-// LoadTemplateByVersion loads the template for a framework version.
-func (t *QATemplate) LoadTemplateByVersion(ctx context.Context, conn pg.Querier, scope Scoper, versionID gid.GID) error {
-	q := fmt.Sprintf(`SELECT %s FROM qa_templates WHERE %s AND framework_version_id = @vid LIMIT 1;`,
+// LoadTemplateByVersion loads a framework version's template in the given
+// language ("" is the canonical/source template).
+func (t *QATemplate) LoadTemplateByVersion(ctx context.Context, conn pg.Querier, scope Scoper, versionID gid.GID, language string) error {
+	q := fmt.Sprintf(`SELECT %s FROM qa_templates WHERE %s AND framework_version_id = @vid AND language = @lang LIMIT 1;`,
 		qaTemplateColumns, scope.SQLFragment())
-	args := pgx.StrictNamedArgs{"vid": versionID}
+	args := pgx.StrictNamedArgs{"vid": versionID, "lang": language}
 	maps.Copy(args, scope.SQLArguments())
 
 	rows, err := conn.Query(ctx, q, args)

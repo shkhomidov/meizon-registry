@@ -94,7 +94,7 @@ func TestQATemplateGeneration(t *testing.T) {
 
 	// The console view carries the DB id (for edit endpoints) and status. A
 	// freshly generated template is a draft, authored beside the requirements.
-	view, err := svc.QATemplateViewFor(ctx, "iso-27001")
+	view, err := svc.QATemplateViewFor(ctx, "iso-27001", "")
 	if err != nil {
 		t.Fatalf("load template view: %v", err)
 	}

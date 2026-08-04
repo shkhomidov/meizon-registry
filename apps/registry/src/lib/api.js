@@ -122,7 +122,7 @@ export const api = {
 
   // QA audit templates.
   qaGenerate: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/qa/generate`, { method: 'POST' }),
-  qaTemplate: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/qa-template`),
+  qaTemplate: (ref, lang) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/qa-template${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`),
   qaEvaluate: (ref, questionId, answer) => request(
     `/console/v1/frameworks/${encodeURIComponent(ref)}/qa/evaluate`,
     { method: 'POST', body: { questionId, answer } }),

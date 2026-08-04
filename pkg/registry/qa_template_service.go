@@ -183,7 +183,7 @@ func (s *Service) AppendQATemplateQuestions(ctx context.Context, actorID gid.GID
 		return // no LLM configured — the requirement is covered when one generates
 	}
 
-	row, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+	row, tpl, err := s.loadQATemplate(ctx, frameworkRef, "")
 	if err != nil {
 		return // no template yet — nothing to append to
 	}
@@ -248,7 +248,7 @@ func (s *Service) AppendQATemplateQuestions(ctx context.Context, actorID gid.GID
 	}
 	// Preserve the template's status — appending to a ready template keeps it
 	// ready; the reviewer can re-check the added questions.
-	if _, err := s.persistQATemplate(ctx, row.FrameworkVersionID, tpl, row.Status); err != nil {
+	if _, err := s.persistQATemplate(ctx, row.FrameworkVersionID, tpl, row.Status, row.Language); err != nil {
 		s.logger.WarnCtx(ctx, "cannot persist appended QA questions: "+err.Error())
 	}
 }
@@ -298,7 +298,7 @@ func (s *Service) runQAGeneration(ctx context.Context, jobID string, client llm.
 	if err := tpl.Validate(); err != nil {
 		return gid.Nil, nil, fmt.Errorf("generated template failed validation: %w", err)
 	}
-	templateID, err := s.persistQATemplate(ctx, versionID, tpl, coredata.QATemplateStatusDraft)
+	templateID, err := s.persistQATemplate(ctx, versionID, tpl, coredata.QATemplateStatusDraft, "")
 	if err != nil {
 		return gid.Nil, nil, err
 	}
@@ -590,11 +590,11 @@ func defaultVerdictModel() *fwqa.VerdictModel {
 }
 
 // persistQATemplate writes the template row and replaces its questions in one
-// transaction. status is the row's status to store — draft for a fresh
-// generation, or the preserved status when re-saving after an incremental
-// append. UpsertTemplate conflicts on framework_version_id, so re-saving adopts
-// the existing row rather than creating a second template for the version.
-func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl *fwqa.Template, status string) (gid.GID, error) {
+// transaction. status is the row's status to store; language selects which
+// per-language copy to write ("" is canonical, a code like "fr" a translation).
+// UpsertTemplate conflicts on (framework_version_id, language), so re-saving a
+// language adopts its existing row rather than creating a duplicate.
+func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl *fwqa.Template, status, language string) (gid.GID, error) {
 	var templateID gid.GID
 	err := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
 		scope := s.platformScope()
@@ -607,6 +607,7 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 			ID:                 gid.New(s.cfg.PlatformTenant, coredata.QATemplateEntityType),
 			FrameworkVersionID: versionID,
 			FrameworkRef:       tpl.Framework.ID,
+			Language:           language,
 			Title:              tpl.Title,
 			Status:             status,
 			GeneratedBy:        tpl.GeneratedBy,
