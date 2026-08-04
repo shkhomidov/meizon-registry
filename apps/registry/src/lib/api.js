@@ -118,6 +118,21 @@ export const api = {
   generateFromText: (text, brief) => request('/console/v1/frameworks/generate', { method: 'POST', body: { text, brief } }),
   // Staged generation runs as a job; poll generateStatus(jobId) until done.
   generateStatus: (jobId) => request(`/console/v1/frameworks/generate/status/${encodeURIComponent(jobId)}`),
+
+  // QA audit templates.
+  qaGenerate: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/qa/generate`, { method: 'POST' }),
+  qaTemplate: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/qa-template`),
+  qaEvaluate: (ref, questionId, answer) => request(
+    `/console/v1/frameworks/${encodeURIComponent(ref)}/qa/evaluate`,
+    { method: 'POST', body: { questionId, answer } }),
+  qaUpdateQuestion: (templateId, qid, question) => request(
+    `/console/v1/qa-templates/${encodeURIComponent(templateId)}/questions/${encodeURIComponent(qid)}`,
+    { method: 'PATCH', body: question }),
+  qaDeleteQuestion: (templateId, qid) => request(
+    `/console/v1/qa-templates/${encodeURIComponent(templateId)}/questions/${encodeURIComponent(qid)}`,
+    { method: 'DELETE' }),
+  qaReorder: (templateId, order) => request(
+    `/console/v1/qa-templates/${encodeURIComponent(templateId)}/reorder`, { method: 'POST', body: { order } }),
   // jobId links the new framework to the source file staged when it was
   // uploaded, so the document stays with what was generated from it.
   acceptGenerated: (doc, jobId) => request(

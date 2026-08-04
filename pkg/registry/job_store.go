@@ -21,6 +21,7 @@ import (
 
 	"go.gearno.de/kit/pg"
 	"go.meizon.cloud/registry/pkg/coredata"
+	"go.meizon.cloud/registry/pkg/docextract"
 	"go.meizon.cloud/registry/pkg/gid"
 )
 
@@ -109,17 +110,71 @@ func (st *jobStore) finish(jobID, status string, res *GeneratedFramework, diff m
 		return
 	}
 
+	// The write failed — most likely a character jsonb rejects (a NUL byte,
+	// SQLSTATE 22P05) that slipped into the model's output or a diff key even
+	// though the source text was sanitized. Before giving up the result, retry
+	// with the SAME payload sanitized. Losing a 106-page OCR generation over one
+	// byte is expensive; the sanitized copy keeps the work minus the offending
+	// character.
+	//
+	// Sanitize the DECODED strings, never the raw JSON: a NUL byte in the data
+	// marshals to a 6-char backslash-u escape, and stripping that escape from the
+	// bytes would corrupt valid content. Round-tripping through a generic value
+	// strips only actual NUL runes, leaving any literal escape text intact.
+	if len(payload) > 0 {
+		if clean, ok := sanitizeJSONStrings(payload); ok {
+			if werr := write(status, clean, errText); werr == nil {
+				st.svc.logger.WarnCtx(ctx, "job result saved after stripping characters jsonb rejected: "+err.Error())
+				return
+			}
+		}
+	}
+
 	// The job MUST reach a terminal state. Leaving the row at "running" is worse
 	// than losing the payload: the console polls it forever, and an operator sees
 	// a job that is still working when nothing is. That is exactly what happened
 	// when a PDF's text carried a NUL and jsonb rejected the payload (22P05) —
 	// the generation had already succeeded and the run looked hung for hours.
 	//
-	// So retry without the payload. The result is unrecoverable either way; a
-	// visible failure is not.
+	// So retry without the payload. A visible failure beats a phantom.
 	st.svc.logger.ErrorCtx(ctx, "cannot record job completion, marking job failed: "+err.Error())
 	if rerr := write("error", nil, "the result could not be saved: "+err.Error()); rerr != nil {
 		st.svc.logger.ErrorCtx(ctx, "cannot mark job failed either, it will stay running: "+rerr.Error())
+	}
+}
+
+// sanitizeJSONStrings strips characters jsonb rejects (NUL, invalid UTF-8) from
+// every string VALUE in a JSON document, operating on the decoded structure so a
+// literal escape sequence in the text is preserved. Returns ok=false only if the
+// payload does not decode, which cannot happen for bytes json.Marshal produced.
+func sanitizeJSONStrings(raw []byte) ([]byte, bool) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, false
+	}
+	out, err := json.Marshal(sanitizeValue(v))
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func sanitizeValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return docextract.Sanitize(t)
+	case []any:
+		for i := range t {
+			t[i] = sanitizeValue(t[i])
+		}
+		return t
+	case map[string]any:
+		for k, val := range t {
+			t[k] = sanitizeValue(val)
+		}
+		return t
+	default:
+		return v
 	}
 }
 

@@ -31,7 +31,11 @@ import (
 	"go.meizon.cloud/registry/pkg/server/api/httpx"
 )
 
-const maxUploadBytes = 25 << 20 // 25 MiB
+// maxUploadBytes caps a document upload. A large standard — a 400-page scanned
+// PDF — can be tens of megabytes, so this is generous. The reverse proxy's body
+// limit must be at least this (see docs/INSTALL-PRODUCTION.md), or the proxy
+// rejects the upload before it reaches here.
+const maxUploadBytes = 128 << 20 // 128 MiB
 
 // generateFramework is the document-first entry point: upload a source document
 // (multipart "document" file) or POST {text, brief} JSON, and the model returns
@@ -142,7 +146,10 @@ func readGenerationInput(w http.ResponseWriter, r *http.Request, svc *registry.S
 // straight to generation share one parse rather than repeating it. On error it
 // has written the response and returns ok=false.
 func readMultipartDocument(w http.ResponseWriter, r *http.Request) (filename string, data []byte, brief, version string, ok bool) {
-	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+	// The argument is the in-memory threshold, not the total size limit — file
+	// data beyond it spills to a temp file. Keep it modest so a large upload does
+	// not sit entirely in RAM; the real cap is enforced on the read below.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "cannot read upload")
 		return "", nil, "", "", false
 	}
@@ -155,12 +162,35 @@ func readMultipartDocument(w http.ResponseWriter, r *http.Request) (filename str
 	}
 	defer func() { _ = file.Close() }()
 
-	data, err = io.ReadAll(io.LimitReader(file, maxUploadBytes))
+	data, tooBig, err := readUpTo(file, maxUploadBytes)
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "cannot read the document")
 		return "", nil, "", "", false
 	}
+	if tooBig {
+		httpx.Error(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("the document is larger than the %d MB limit — split it into parts or compress it", maxUploadBytes>>20))
+		return "", nil, "", "", false
+	}
 	return header.Filename, data, brief, version, true
+}
+
+// readUpTo reads r fully but caps it at limit, reporting tooBig=true when the
+// source has MORE than limit bytes rather than silently truncating it. This is
+// the correctness that matters for large uploads: io.LimitReader returns EOF at
+// the cap with no error, so reading exactly `limit` would cut a 400-page PDF to
+// its first pages and process the fragment as if it were the whole document. By
+// reading one byte past the cap and checking the length, an over-limit file is
+// detected and rejected, not quietly mangled.
+func readUpTo(r io.Reader, limit int64) (data []byte, tooBig bool, err error) {
+	data, err = io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(data)) > limit {
+		return nil, true, nil
+	}
+	return data, false, nil
 }
 
 // exportFramework downloads the framework as a flat meizon-framework/v2 file —

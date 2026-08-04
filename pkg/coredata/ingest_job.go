@@ -32,6 +32,7 @@ const (
 	JobKindNextVersion = "next_version"
 	JobKindTranslate   = "translate"
 	JobKindAutoMap     = "automap"
+	JobKindQATemplate  = "qa_template"
 
 	JobStatusRunning = "running"
 	JobStatusDone    = "done"

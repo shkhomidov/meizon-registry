@@ -94,6 +94,16 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/frameworks/{ref}/ai/generate", h.aiGenerate)
 	r.Post("/frameworks/{ref}/ai/accept", h.aiAccept)
 
+	// QA audit templates: generate from published requirements, view/edit, and
+	// the shared answer evaluator the chat preview calls.
+	r.Post("/frameworks/{ref}/qa/generate", h.qaGenerate)
+	r.Get("/frameworks/{ref}/qa-template", h.qaTemplate)
+	r.Post("/frameworks/{ref}/qa/evaluate", h.qaEvaluate)
+	r.Patch("/qa-templates/{id}/questions/{qid}", h.qaUpdateQuestion)
+	r.Delete("/qa-templates/{id}/questions/{qid}", h.qaDeleteQuestion)
+	r.Post("/qa-templates/{id}/reorder", h.qaReorder)
+	r.Post("/qa-templates/{id}/status", h.qaSetStatus)
+
 	// Catalogs: control library, evidence guidance, policy templates.
 	r.Get("/frameworks/{ref}/controls-library", h.listControlLibrary)
 	r.Post("/frameworks/{ref}/controls-library", h.addControlEntry)

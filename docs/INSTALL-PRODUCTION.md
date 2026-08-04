@@ -85,8 +85,10 @@ Terminate TLS in front of `:8080` and forward `X-Forwarded-Proto`. Everything �
 console and API — is one upstream, so no path-based split is needed. Two things
 worth setting:
 
-- **Upload body limit ≥ 32 MB.** Scanned standards are large, and the default
-  1 MB in most proxies rejects them with an opaque 413.
+- **Upload body limit ≥ 128 MB.** A large scanned standard (e.g. a 400-page PDF)
+  can be tens of megabytes; the app accepts up to 128 MB, so the proxy must allow
+  at least that. The default 1 MB in most proxies rejects uploads with an opaque
+  413, and a proxy limit below the app's would truncate large documents.
 - **Proxy read timeout ≥ 20 minutes** on `/api/console/v1/frameworks/generate`
   and the other job-starting routes. They return immediately with a job id, but
   OCR of a 100-page scan runs for minutes inside the request that starts it.
