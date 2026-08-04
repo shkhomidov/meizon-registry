@@ -84,6 +84,7 @@ func (s *Service) CreateFramework(ctx context.Context, actorID gid.GID, req Crea
 			License:     req.License,
 			Description: req.Description,
 			Public:      false,
+			CreatedBy:   actorID,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
@@ -109,6 +110,31 @@ func (s *Service) CreateFramework(ctx context.Context, actorID gid.GID, req Crea
 		return s.recordAudit(ctx, tx, scope, actorID, "framework.create", framework.ID.String(), framework.ReferenceID)
 	})
 	return out, err
+}
+
+// DeleteFramework permanently removes a framework and, by cascade, every version
+// under it and their structure, controls, cross-mappings and audit templates. It
+// is gated by ActionFrameworkDelete — held only by superadmins. This is
+// destructive and irreversible; retiring a published version for consumers is
+// what deprecation is for. Deleting a published framework also removes it from
+// the distribution catalog.
+func (s *Service) DeleteFramework(ctx context.Context, actorID gid.GID, ref string) error {
+	return s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+		scope := s.platformScope()
+
+		var framework coredata.Framework
+		if err := framework.LoadByReferenceID(ctx, tx, scope, ref); err != nil {
+			return err
+		}
+		if err := s.authorize(ctx, tx, actorID, iam.ActionFrameworkDelete, framework.Region, framework.ID); err != nil {
+			return err
+		}
+		if err := s.recordAudit(ctx, tx, scope, actorID, "framework.delete", framework.ID.String(),
+			fmt.Sprintf("%s deleted", framework.ReferenceID)); err != nil {
+			return err
+		}
+		return coredata.Framework{}.Delete(ctx, tx, scope, framework.ID)
+	})
 }
 
 // AddControlRequest describes a control to add to a draft version.

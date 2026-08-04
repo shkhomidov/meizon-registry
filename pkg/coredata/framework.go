@@ -43,16 +43,19 @@ type (
 		Description string  `db:"description"`
 		// SourceLanguage is the language the content was authored in. English is
 		// the canonical language; other languages live in framework_translations.
-		SourceLanguage string    `db:"source_language"`
-		Public         bool      `db:"public"`
-		CreatedAt      time.Time `db:"created_at"`
-		UpdatedAt      time.Time `db:"updated_at"`
+		SourceLanguage string `db:"source_language"`
+		Public         bool   `db:"public"`
+		// CreatedBy is the identity that first drafted this framework — used to
+		// scope auditors to their own frameworks.
+		CreatedBy gid.GID   `db:"created_by"`
+		CreatedAt time.Time `db:"created_at"`
+		UpdatedAt time.Time `db:"updated_at"`
 	}
 
 	Frameworks []*Framework
 )
 
-const frameworkColumns = `id, reference_id, name, short_name, region, authority, license, description, source_language, public, created_at, updated_at`
+const frameworkColumns = `id, reference_id, name, short_name, region, authority, license, description, source_language, public, created_by, created_at, updated_at`
 
 // CursorKey builds the pagination cursor value for the given order field.
 func (f *Framework) CursorKey(orderBy FrameworkOrderField) page.CursorKey {
@@ -92,9 +95,9 @@ func (f *Framework) AuthorizationAttributes(ctx context.Context, conn pg.Querier
 func (f Framework) Insert(ctx context.Context, conn pg.Tx, scope Scoper) error {
 	q := `
 INSERT INTO frameworks (
-    tenant_id, id, reference_id, name, short_name, region, authority, license, description, source_language, public, created_at, updated_at
+    tenant_id, id, reference_id, name, short_name, region, authority, license, description, source_language, public, created_by, created_at, updated_at
 ) VALUES (
-    @tenant_id, @id, @reference_id, @name, @short_name, @region, @authority, @license, @description, @source_language, @public, @created_at, @updated_at
+    @tenant_id, @id, @reference_id, @name, @short_name, @region, @authority, @license, @description, @source_language, @public, @created_by, @created_at, @updated_at
 );`
 
 	args := pgx.StrictNamedArgs{
@@ -109,6 +112,7 @@ INSERT INTO frameworks (
 		"description":     f.Description,
 		"source_language": f.SourceLanguage,
 		"public":          f.Public,
+		"created_by":      f.CreatedBy,
 		"created_at":      f.CreatedAt,
 		"updated_at":      f.UpdatedAt,
 	}
@@ -197,6 +201,42 @@ func (fs *Frameworks) LoadAll(ctx context.Context, conn pg.Querier, scope Scoper
 
 	*fs = frameworks
 
+	return nil
+}
+
+// LoadAllOwnedBy lists only the frameworks created by ownerID — the owner-scoped
+// listing an auditor sees.
+func (fs *Frameworks) LoadAllOwnedBy(ctx context.Context, conn pg.Querier, scope Scoper, ownerID gid.GID) error {
+	q := fmt.Sprintf(`SELECT %s FROM frameworks WHERE %s AND created_by = @owner ORDER BY name ASC;`,
+		frameworkColumns, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"owner": ownerID}
+	maps.Copy(args, scope.SQLArguments())
+
+	rows, err := conn.Query(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot query frameworks: %w", err)
+	}
+	frameworks, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Framework])
+	if err != nil {
+		return fmt.Errorf("cannot collect frameworks: %w", err)
+	}
+	*fs = frameworks
+	return nil
+}
+
+// Delete removes a framework row. Version and dependent rows are cleared by ON
+// DELETE CASCADE, so this is the single statement that erases a framework.
+func (f Framework) Delete(ctx context.Context, conn pg.Tx, scope Scoper, id gid.GID) error {
+	q := fmt.Sprintf(`DELETE FROM frameworks WHERE %s AND id = @id;`, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"id": id}
+	maps.Copy(args, scope.SQLArguments())
+	tag, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return fmt.Errorf("cannot delete framework: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrResourceNotFound
+	}
 	return nil
 }
 
