@@ -8,6 +8,7 @@ import LanguageBar from '../components/LanguageBar.jsx'
 import AutoMapPanel from '../components/AutoMapPanel.jsx'
 import CatalogControls from '../components/CatalogControls.jsx'
 import CatalogPolicies from '../components/CatalogPolicies.jsx'
+import QATab, { countQuestions, indexByRequirement } from '../components/QATab.jsx'
 import {
   Page, Card, Button, StatusBadge, Tabs, Table, THead, TR, TH, TD, EmptyState,
 } from '../components/ui.jsx'
@@ -30,6 +31,7 @@ export default function FrameworkDetail() {
   const [tab, setTab] = useState('structure')
   const [aiConfigured, setAiConfigured] = useState(false)
   const [frameworks, setFrameworks] = useState([])
+  const [qa, setQa] = useState(null) // the audit template for the latest version, or null
 
   const load = useCallback(async () => {
     setError('')
@@ -44,7 +46,13 @@ export default function FrameworkDetail() {
       setPolicies(pols)
     } catch (e) { setError(e.message) }
   }, [ref])
+  // The audit template loads independently: a 404 (none generated yet) is the
+  // normal empty state, not an error.
+  const loadQA = useCallback(async () => {
+    try { setQa(await api.qaTemplate(ref)) } catch { setQa(null) }
+  }, [ref])
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadQA() }, [loadQA])
   useEffect(() => {
     api.aiStatus().then((s) => setAiConfigured(s.configured)).catch(() => {})
     api.listFrameworks().then(setFrameworks).catch(() => {})
@@ -68,8 +76,8 @@ export default function FrameworkDetail() {
       <Button variant="ghost" icon={Download}
         onClick={() => api.downloadFramework(ref).catch((e) => setError(e.message))}>Download JSON</Button>
       {canAuthor(viewer) && <Button variant="ghost" icon={GitBranch} onClick={() => navigate(`/frameworks/${ref}/new-version`)}>New version from document</Button>}
-      {/* Audit templates are built from published requirements. */}
-      {status === 'PUBLISHED' && canAuthor(viewer) && <Button variant="ghost" icon={ClipboardCheck} onClick={() => navigate(`/frameworks/${ref}/qa`)}>Audit template</Button>}
+      {/* The audit template is authored in the Audit tab, on the draft. */}
+      {canAuthor(viewer) && <Button variant="ghost" icon={ClipboardCheck} onClick={() => setTab('qa')}>Audit template</Button>}
       {draft && canAuthor(viewer) && <Button variant="ghost" icon={Send} onClick={() => act(() => api.submit(ref))}>Submit for review</Button>}
       {status === 'IN_REVIEW' && canApprove(viewer) && <Button icon={Check} onClick={() => act(() => api.approve(ref, 'approved via console'))}>Approve</Button>}
       {/* A reviewer needs a way to say no. Without it the only options were
@@ -125,6 +133,7 @@ export default function FrameworkDetail() {
           { key: 'structure', label: `Structure (${countRequirements(structure)})` },
           { key: 'catalog', label: `Controls (${controls.length})` },
           { key: 'mappings', label: 'Cross-mappings' },
+          { key: 'qa', label: qa ? `Audit (${countQuestions(qa)})` : 'Audit' },
           { key: 'policies', label: `Policies (${policies.length})` },
           { key: 'overview', label: 'Overview' },
           ...(latestControls?.length ? [{ key: 'controls', label: `Legacy controls (${latestControls.length})` }] : []),
@@ -133,7 +142,13 @@ export default function FrameworkDetail() {
       />
 
       {tab === 'structure' && (
-        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer)} onChanged={load} />
+        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer)}
+          onChanged={() => { load(); loadQA() }}
+          qaByReq={indexByRequirement(qa)} qaTemplateId={qa?.templateId} qaEditable={canAuthor(viewer)} onQuestionChanged={loadQA} />
+      )}
+
+      {tab === 'qa' && (
+        <QATab refId={ref} template={qa} editable={canAuthor(viewer)} onChanged={loadQA} />
       )}
 
       {tab === 'mappings' && (

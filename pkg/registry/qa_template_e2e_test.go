@@ -24,9 +24,9 @@ import (
 )
 
 // TestQATemplateGeneration walks the full generation path against a real DB with
-// a mock LLM: publish a framework, generate an audit template, and assert it
-// persists as a valid, ready template whose questions bind to the framework's
-// requirement refs.
+// a mock LLM: create a draft framework, generate an audit template on the draft,
+// and assert it persists as a valid DRAFT template whose questions bind to the
+// framework's requirement refs.
 func TestQATemplateGeneration(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -64,13 +64,7 @@ func TestQATemplateGeneration(t *testing.T) {
 	if err := svc.SetLLMSettings(ctx, super, registry.SetLLMSettingsRequest{Provider: "openai", APIKey: "sk-test", Model: "gpt-4o"}); err != nil {
 		t.Fatalf("llm settings: %v", err)
 	}
-	mustCreateUser(t, svc, super, "qa-mod@meizon.test", "Mod", "moderator", []string{"EU"})
-	mod := mustID(t, svc, "qa-mod@meizon.test")
-	if err := svc.GenerateSigningKey(ctx, super, "reg-qa"); err != nil {
-		t.Fatalf("signing key: %v", err)
-	}
-
-	// A published framework with two requirements under one category.
+	// A draft framework with two requirements under one category.
 	created, err := svc.CreateFramework(ctx, super, registry.CreateFrameworkRequest{
 		ReferenceID: "iso-27001", Name: "ISO 27001", Region: "EU", License: "public-domain",
 	})
@@ -87,22 +81,8 @@ func TestQATemplateGeneration(t *testing.T) {
 		t.Fatalf("add requirement: %v", err)
 	}
 
-	// Generating before publish must be refused.
-	if _, err := svc.StartQATemplateJob(ctx, super, "iso-27001"); err == nil {
-		t.Fatal("generating a QA template for an unpublished framework should fail")
-	}
-
-	// Publish, then generate.
-	if err := svc.Submit(ctx, super, created.VersionID); err != nil {
-		t.Fatalf("submit: %v", err)
-	}
-	if err := svc.Approve(ctx, mod, created.VersionID, "ok"); err != nil {
-		t.Fatalf("approve: %v", err)
-	}
-	if err := svc.Publish(ctx, mod, created.VersionID); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-
+	// The audit template is authored on the DRAFT, alongside the requirements —
+	// it deliberately does NOT require a published version.
 	jobID, err := svc.StartQATemplateJob(ctx, super, "iso-27001")
 	if err != nil {
 		t.Fatalf("start qa job: %v", err)
@@ -110,6 +90,19 @@ func TestQATemplateGeneration(t *testing.T) {
 	st := waitForJob(t, svc, jobID)
 	if st.Status != "done" {
 		t.Fatalf("qa job %s: %s", st.Status, st.Error)
+	}
+
+	// The console view carries the DB id (for edit endpoints) and status. A
+	// freshly generated template is a draft, authored beside the requirements.
+	view, err := svc.QATemplateViewFor(ctx, "iso-27001")
+	if err != nil {
+		t.Fatalf("load template view: %v", err)
+	}
+	if view.Status != "draft" {
+		t.Fatalf("a freshly generated template must be draft, got %q", view.Status)
+	}
+	if view.TemplateID == "" {
+		t.Fatal("template view must expose the DB template id for edits")
 	}
 
 	tpl, err := svc.QATemplateFor(ctx, "iso-27001")

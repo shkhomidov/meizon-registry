@@ -271,6 +271,11 @@ func (s *Service) AcceptGeneratedFlat(ctx context.Context, actorID gid.GID, flat
 	// without being asked. Runs in the background; a framework already in
 	// English is skipped rather than translated into itself.
 	s.EnsureCanonicalTranslation(ctx, actorID, flat.ID)
+
+	// Author the audit (QA) template alongside the new draft's requirements, so
+	// the questions are ready to review in the same flow. Best-effort: silent if
+	// no LLM is configured, and it never blocks or fails the accept.
+	s.AutoStartQATemplate(ctx, actorID, flat.ID, out.VersionID, flat)
 	return out, nil
 }
 

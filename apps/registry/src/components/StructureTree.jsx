@@ -3,16 +3,17 @@
 // requirement is the assessable leaf. All authoring happens here in DRAFT;
 // published versions render read-only.
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Plus, Trash2, Link2, Sparkles } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Trash2, Link2, Sparkles, ClipboardCheck } from 'lucide-react'
 import { api } from '../lib/api.js'
 import AIAssist from './AIAssist.jsx'
+import { QuestionRow } from './QATab.jsx'
 import { Badge, Button, Dialog, Field, Input, Select, Textarea, EmptyState } from './ui.jsx'
 
 const RELATION_TONE = { equivalent: 'green', partial: 'amber', superset: 'blue', subset: 'blue' }
 
 function cx(...p) { return p.filter(Boolean).join(' ') }
 
-export default function StructureTree({ refId, structure, editable, onChanged }) {
+export default function StructureTree({ refId, structure, editable, onChanged, qaByReq = {}, qaTemplateId, qaEditable, onQuestionChanged }) {
   const [dialog, setDialog] = useState(null) // {level, parent}
   const [error, setError] = useState('')
   const [ai, setAi] = useState({ configured: false })
@@ -54,7 +55,8 @@ export default function StructureTree({ refId, structure, editable, onChanged })
 
       {structure.map((cat) => (
         <CategoryNode key={cat.code} refId={refId} cat={cat} editable={editable}
-          onAdd={(level, parent) => setDialog({ level, parent })} onDelete={del} onChanged={onChanged} />
+          onAdd={(level, parent) => setDialog({ level, parent })} onDelete={del} onChanged={onChanged}
+          qaByReq={qaByReq} qaTemplateId={qaTemplateId} qaEditable={qaEditable} onQuestionChanged={onQuestionChanged} />
       ))}
 
       {dialog && (
@@ -92,7 +94,7 @@ function IconBtn({ title, onClick, icon: Icon, danger }) {
   )
 }
 
-function CategoryNode({ refId, cat, editable, onAdd, onDelete, onChanged }) {
+function CategoryNode({ refId, cat, editable, onAdd, onDelete, onChanged, qaByReq, qaTemplateId, qaEditable, onQuestionChanged }) {
   const [open, setOpen] = useState(true)
   return (
     <div className="bg-card border border-border rounded-card px-3 py-1.5">
@@ -103,13 +105,14 @@ function CategoryNode({ refId, cat, editable, onAdd, onDelete, onChanged }) {
         </>} />
       {open && cat.requirements.map((req) => (
         <RequirementNode key={req.code} refId={refId} req={req} editable={editable}
-          onDelete={onDelete} onChanged={onChanged} />
+          onDelete={onDelete} onChanged={onChanged}
+          questions={qaByReq[req.code] || []} qaTemplateId={qaTemplateId} qaEditable={qaEditable} onQuestionChanged={onQuestionChanged} />
       ))}
     </div>
   )
 }
 
-function RequirementNode({ refId, req, editable, onDelete, onChanged }) {
+function RequirementNode({ refId, req, editable, onDelete, onChanged, questions = [], qaTemplateId, qaEditable, onQuestionChanged }) {
   const [open, setOpen] = useState(false)
   const resolved = req.mappings.filter((m) => m.resolved).length
   return (
@@ -122,6 +125,12 @@ function RequirementNode({ refId, req, editable, onDelete, onChanged }) {
         <span className="font-mono text-[12px] text-sage shrink-0">{req.number || req.code}</span>
         <span className="text-[13px] text-text truncate">{req.title}</span>
         {req.origin === 'ai' && <Badge tone="blue">AI</Badge>}
+        {questions.length > 0 && (
+          <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted shrink-0" title="Linked audit questions">
+            <ClipboardCheck size={12} className="text-sage" />
+            {questions.length}
+          </span>
+        )}
         {req.mappings.length > 0 && (
           <span className="inline-flex items-center gap-1 font-mono text-[10px] text-muted shrink-0">
             <Link2 size={12} className={resolved === req.mappings.length ? 'text-st-green' : 'text-st-amber'} />
@@ -135,9 +144,24 @@ function RequirementNode({ refId, req, editable, onDelete, onChanged }) {
       {open && (
         <div className="ml-7 mb-2 space-y-2">
           {req.description && <p className="text-[12.5px] text-text2 whitespace-pre-wrap">{req.description}</p>}
+          <RequirementQuestions questions={questions} qaTemplateId={qaTemplateId} editable={qaEditable} onChanged={onQuestionChanged} />
           <MappingPanel refId={refId} item={req} editable={editable} onChanged={onChanged} />
         </div>
       )}
+    </div>
+  )
+}
+
+// RequirementQuestions shows the audit questions linked to this requirement (by
+// requirementRef), editable in place. Nothing renders until a template exists.
+function RequirementQuestions({ questions, qaTemplateId, editable, onChanged }) {
+  if (!qaTemplateId || questions.length === 0) return null
+  return (
+    <div className="bg-inset border border-border rounded-md p-3 space-y-2">
+      <div className="eyebrow">Audit questions</div>
+      {questions.map((q) => (
+        <QuestionRow key={q.id} templateId={qaTemplateId} question={q} editable={editable} onChanged={onChanged} />
+      ))}
     </div>
   )
 }

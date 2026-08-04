@@ -15,11 +15,12 @@ const KIND_LABEL = {
   next_version: 'New version',
   translate: 'Translate',
   automap: 'Cross-map',
+  qa_template: 'Audit template',
 }
 
 // Steps that count work report a unit, so "12 / 106" reads as pages rather
 // than an unexplained number.
-const STEP_UNIT = { ocr: 'pages', chunk: 'chunks', extract: 'chunks', controls: 'batches', translate: 'batches', adjudicate: 'batches', retrieve: 'nodes' }
+const STEP_UNIT = { ocr: 'pages', chunk: 'chunks', extract: 'chunks', controls: 'batches', translate: 'batches', adjudicate: 'batches', retrieve: 'nodes', questions: 'requirements' }
 
 function elapsed(from, to) {
   const ms = new Date(to) - new Date(from)

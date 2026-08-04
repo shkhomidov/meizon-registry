@@ -40,7 +40,17 @@ func (s *Service) ImportFrameworkDoc(ctx context.Context, actorID gid.GID, doc *
 	if err != nil {
 		return CreateFrameworkResult{}, err
 	}
-	return s.importFrameworkDoc(ctx, actorID, flattened, "import", "framework.import")
+	out, err := s.importFrameworkDoc(ctx, actorID, flattened, "import", "framework.import")
+	if err != nil {
+		return out, err
+	}
+	// Author the audit template for the imported draft too, so an imported
+	// framework behaves like a generated one. Best-effort and only when an LLM is
+	// configured; ExportFlat resolves the just-created version.
+	if flat, ferr := s.ExportFlat(ctx, doc.ID); ferr == nil {
+		s.AutoStartQATemplate(ctx, actorID, doc.ID, out.VersionID, flat)
+	}
+	return out, nil
 }
 
 // importFrameworkDoc is the shared create-from-document path; origin marks how

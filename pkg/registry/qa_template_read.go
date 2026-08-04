@@ -25,11 +25,22 @@ import (
 	"go.meizon.cloud/registry/pkg/gid"
 )
 
-// QATemplateFor reconstructs the stored audit template for a framework's latest
-// published version into a fwqa.Template — the shape the console and the preview
-// runner consume. Returns ErrResourceNotFound if none has been generated.
-func (s *Service) QATemplateFor(ctx context.Context, frameworkRef string) (*fwqa.Template, error) {
-	var out *fwqa.Template
+// QATemplateView is the console-facing payload: the reconstructed template plus
+// the DB identifiers the editor needs — the template's GID (which the per-question
+// edit endpoints address) and its draft/ready status. The embedded *fwqa.Template
+// flattens into the same JSON object, so the client sees one merged shape.
+type QATemplateView struct {
+	TemplateID string `json:"templateId"`
+	Status     string `json:"status"`
+	*fwqa.Template
+}
+
+// loadQATemplate loads the stored row and reconstructs the template for a
+// framework's latest version (draft or published). It is the shared core behind
+// the pure-template and console-view readers.
+func (s *Service) loadQATemplate(ctx context.Context, frameworkRef string) (*coredata.QATemplate, *fwqa.Template, error) {
+	var outRow *coredata.QATemplate
+	var outTpl *fwqa.Template
 	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
 		scope := s.platformScope()
 
@@ -37,13 +48,16 @@ func (s *Service) QATemplateFor(ctx context.Context, frameworkRef string) (*fwqa
 		if err := framework.LoadByReferenceID(ctx, conn, scope, frameworkRef); err != nil {
 			return err
 		}
-		var pub coredata.FrameworkVersion
-		if err := pub.LoadLatestPublished(ctx, conn, framework.ID); err != nil {
+		// The audit template is bound to the framework's latest version (draft or
+		// published) — it is authored alongside the requirements, not gated on a
+		// published version.
+		versionID, err := s.latestVersionIDConn(ctx, conn, framework.ID)
+		if err != nil {
 			return err
 		}
 
 		var row coredata.QATemplate
-		if err := row.LoadTemplateByVersion(ctx, conn, scope, pub.ID); err != nil {
+		if err := row.LoadTemplateByVersion(ctx, conn, scope, versionID); err != nil {
 			return err
 		}
 		var questions coredata.QAQuestions
@@ -54,10 +68,29 @@ func (s *Service) QATemplateFor(ctx context.Context, frameworkRef string) (*fwqa
 		if err != nil {
 			return err
 		}
-		out = tpl
+		outRow = &row
+		outTpl = tpl
 		return nil
 	})
-	return out, err
+	return outRow, outTpl, err
+}
+
+// QATemplateFor reconstructs the stored audit template for a framework's latest
+// version into a fwqa.Template — the shape the preview runner consumes. Returns
+// ErrResourceNotFound if none has been generated.
+func (s *Service) QATemplateFor(ctx context.Context, frameworkRef string) (*fwqa.Template, error) {
+	_, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+	return tpl, err
+}
+
+// QATemplateViewFor is the console read: the template plus its DB GID and status,
+// so the editor can address questions and show the draft/ready state.
+func (s *Service) QATemplateViewFor(ctx context.Context, frameworkRef string) (*QATemplateView, error) {
+	row, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+	if err != nil {
+		return nil, err
+	}
+	return &QATemplateView{TemplateID: row.ID.String(), Status: row.Status, Template: tpl}, nil
 }
 
 // QATemplateByID reconstructs a template by its id — used by the edit endpoints
