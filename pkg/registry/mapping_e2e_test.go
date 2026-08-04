@@ -186,7 +186,7 @@ func TestCrossMappingStubResolution(t *testing.T) {
 	}
 
 	// Structure view reflects resolution state for the UI.
-	tree, err := svc.StructureOf(ctx, pci.VersionID)
+	tree, err := svc.StructureOf(ctx, pci.VersionID, "")
 	if err != nil {
 		t.Fatalf("structure: %v", err)
 	}

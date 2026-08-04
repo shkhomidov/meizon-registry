@@ -81,7 +81,7 @@ func TestAIGenerateAcceptPipeline(t *testing.T) {
 	}
 
 	// Nothing applied yet.
-	tree, _ := svc.StructureOf(ctx, created.VersionID)
+	tree, _ := svc.StructureOf(ctx, created.VersionID, "")
 	if len(tree) != 0 {
 		t.Fatalf("proposals must not auto-apply, tree has %d categories", len(tree))
 	}
@@ -101,7 +101,7 @@ func TestAIGenerateAcceptPipeline(t *testing.T) {
 		t.Fatalf("expected 2 applied, got %d", applied)
 	}
 
-	tree, err = svc.StructureOf(ctx, created.VersionID)
+	tree, err = svc.StructureOf(ctx, created.VersionID, "")
 	if err != nil || len(tree) != 2 {
 		t.Fatalf("expected 2 categories after accept, got %d (err=%v)", len(tree), err)
 	}

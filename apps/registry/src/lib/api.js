@@ -96,7 +96,7 @@ export const api = {
   },
 
   // Structure (universal hierarchy) + cross-mappings — all UI-managed.
-  getStructure: (ref) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/structure`),
+  getStructure: (ref, lang) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/structure${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`),
   addCategory: (ref, payload) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/categories`, { method: 'POST', body: payload }),
   addRequirement: (ref, payload) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/requirements`, { method: 'POST', body: payload }),
   deleteNode: (ref, level, code) => request(`/console/v1/frameworks/${encodeURIComponent(ref)}/structure/${level}/${encodeURIComponent(code)}`, { method: 'DELETE' }),

@@ -40,7 +40,7 @@ func (h *Handler) getStructure(w http.ResponseWriter, r *http.Request) {
 		httpx.ServiceError(w, err)
 		return
 	}
-	tree, err := h.svc.StructureOf(r.Context(), versionID)
+	tree, err := h.svc.StructureOf(r.Context(), versionID, r.URL.Query().Get("lang"))
 	if err != nil {
 		httpx.ServiceError(w, err)
 		return
