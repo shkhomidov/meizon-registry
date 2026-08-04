@@ -144,9 +144,11 @@ curl -H "Authorization: Bearer $TOKEN" \
 how far behind it is (`headSeq - nextSeq`) without draining the feed.
 Drain by looping while `hasMore` is true, passing the previous `nextSeq`.
 
-**Event kinds.** The database accepts four: `published`, `deprecated`,
-`mapping_published`, `mapping_deprecated`. Treat unknown kinds as ignorable
-rather than an error — the set will grow.
+**Event kinds.** `published`, `deprecated`, `mapping_published`,
+`mapping_deprecated`, `qa_published`, `translation_published`. Treat unknown
+kinds as ignorable rather than an error — the set will grow. The last two (audit
+templates and translations) are covered in
+[GRC-INTEGRATION.md](GRC-INTEGRATION.md#6-audit-qa-templates--meizon-qa-templatev1).
 
 **Mapping events carry their target.** A `mapping_published` /
 `mapping_deprecated` event serialises `targetFramework` and `targetVersion` (in

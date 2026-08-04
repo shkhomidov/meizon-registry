@@ -232,23 +232,62 @@ func (s *Service) Bundle(ctx context.Context, tc TokenContext, referenceID, vers
 
 // Seed returns the flat GRC seed for a published version and records the
 // download.
-func (s *Service) Seed(ctx context.Context, tc TokenContext, referenceID, version string) (fwschema.GRCSeed, error) {
+// Seed returns the flat import shape. When language is a non-empty, non-source
+// code, the stored translation overlay is applied so a consumer can import
+// localized names/descriptions; an untranslated node keeps its canonical text.
+func (s *Service) Seed(ctx context.Context, tc TokenContext, referenceID, version, language string) (fwschema.GRCSeed, error) {
 	var seed fwschema.GRCSeed
 	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
 		framework, ver, err := s.resolveDistributable(ctx, conn, tc, referenceID, version)
 		if err != nil {
 			return err
 		}
+		scope := coredata.NewScopeFromObjectID(framework.ID)
 
-		b, err := s.assembleBundle(ctx, conn, coredata.NewScopeFromObjectID(framework.ID), framework, ver)
+		b, err := s.assembleBundle(ctx, conn, scope, framework, ver)
 		if err != nil {
 			return err
 		}
 
 		seed = b.Flatten()
+		if language != "" {
+			var overlay coredata.FrameworkTranslations
+			if err := overlay.LoadAllByVersionAndLanguage(ctx, conn, scope, ver.ID, language); err != nil {
+				return err
+			}
+			applySeedOverlay(&seed, overlay)
+		}
 		return s.recordDownload(ctx, conn, tc, ver, coredata.DownloadFormatSeed)
 	})
 	return seed, err
+}
+
+// applySeedOverlay swaps translated framework/requirement/control text into a
+// flat seed by ref. A seed control's id is the requirement (or v1 control) ref.
+func applySeedOverlay(seed *fwschema.GRCSeed, overlay coredata.FrameworkTranslations) {
+	byKey := map[string]*coredata.FrameworkTranslation{}
+	for _, t := range overlay {
+		byKey[t.NodeKind+"\x00"+t.NodeRef] = t
+	}
+	if t := byKey[coredata.TranslationNodeFramework+"\x00"]; t != nil && t.Name != "" {
+		seed.Name = t.Name
+	}
+	for i := range seed.Controls {
+		id := seed.Controls[i].ID
+		t := byKey[coredata.TranslationNodeRequirement+"\x00"+id]
+		if t == nil {
+			t = byKey[coredata.TranslationNodeControl+"\x00"+id]
+		}
+		if t == nil {
+			continue
+		}
+		if t.Name != "" {
+			seed.Controls[i].Name = t.Name
+		}
+		if t.Description != "" {
+			seed.Controls[i].Description = t.Description
+		}
+	}
 }
 
 // resolveDistributable loads a framework/version pair, enforcing the copyright

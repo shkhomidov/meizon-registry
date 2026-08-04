@@ -53,6 +53,8 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/frameworks/{id}/versions/{version}", h.bundle)
 	r.Head("/frameworks/{id}/versions/{version}", h.bundle)
 	r.Get("/frameworks/{id}/versions/{version}/seed", h.seed)
+	// The published version's audit (QA) template; ?lang selects a translation.
+	r.Get("/frameworks/{id}/versions/{version}/qa", h.qa)
 
 	// Cross-mapping sets: a catalog for cold discovery, and fetch-by-pair, which
 	// the consumer also reaches from mapping_published feed events.
@@ -189,6 +191,9 @@ func (h *Handler) framework(w http.ResponseWriter, r *http.Request) {
 		Status      string     `json:"status"`
 		ContentHash string     `json:"contentHash"`
 		PublishedAt *time.Time `json:"publishedAt,omitempty"`
+		// Languages this version can be fetched in (source + translations); pull
+		// the localized seed/QA with ?lang=<code>.
+		Languages []string `json:"languages,omitempty"`
 	}
 	out := struct {
 		ID        string        `json:"id"`
@@ -205,8 +210,10 @@ func (h *Handler) framework(w http.ResponseWriter, r *http.Request) {
 		if v.Status != coredata.FrameworkVersionStatusPublished {
 			continue
 		}
+		langs, _ := h.svc.VersionLanguages(r.Context(), framework, v.ID) // best-effort discovery
 		out.Versions = append(out.Versions, versionView{
-			Version: v.Version, Status: string(v.Status), ContentHash: v.ContentHash, PublishedAt: v.PublishedAt,
+			Version: v.Version, Status: string(v.Status), ContentHash: v.ContentHash,
+			PublishedAt: v.PublishedAt, Languages: langs,
 		})
 	}
 
@@ -245,13 +252,33 @@ func (h *Handler) seed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	seed, err := h.svc.Seed(r.Context(), tc, chi.URLParam(r, "id"), chi.URLParam(r, "version"))
+	seed, err := h.svc.Seed(r.Context(), tc, chi.URLParam(r, "id"), chi.URLParam(r, "version"), r.URL.Query().Get("lang"))
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
 	writeJSON(w, r, http.StatusOK, seed)
+}
+
+// qa serves the published version's audit (QA) template. `?lang` selects a
+// translation, falling back to the canonical template. 404 if the version has no
+// template marked ready.
+func (h *Handler) qa(w http.ResponseWriter, r *http.Request) {
+	tc, ok := authn.TokenContextFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	tpl, err := h.svc.QATemplateDistribution(r.Context(), tc,
+		chi.URLParam(r, "id"), chi.URLParam(r, "version"), r.URL.Query().Get("lang"))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, r, http.StatusOK, tpl)
 }
 
 func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {

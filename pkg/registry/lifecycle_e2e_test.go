@@ -198,7 +198,7 @@ func TestLifecycleEndToEnd(t *testing.T) {
 	}
 
 	// The seed matches the bundle's flatten output exactly (imports unchanged).
-	seed, err := svc.Seed(ctx, tc, "nist-800-171-r2", "latest")
+	seed, err := svc.Seed(ctx, tc, "nist-800-171-r2", "latest", "")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
