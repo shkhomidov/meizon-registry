@@ -59,7 +59,7 @@ func (s *Service) AddItemMapping(ctx context.Context, actorID gid.GID, req AddIt
 
 	var id gid.GID
 	err := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		version, _, err := s.requireDraft(ctx, tx, actorID, req.VersionID, iam.ActionControlEdit)
+		version, _, err := s.requireMappable(ctx, tx, actorID, req.VersionID, iam.ActionControlEdit)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func (s *Service) AddItemMapping(ctx context.Context, actorID gid.GID, req AddIt
 // RemoveItemMapping deletes a mapping from a draft version.
 func (s *Service) RemoveItemMapping(ctx context.Context, actorID, versionID, mappingID gid.GID) error {
 	return s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		if _, _, err := s.requireDraft(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
+		if _, _, err := s.requireMappable(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
 			return err
 		}
 		return coredata.RequirementCrossMapping{}.Delete(ctx, tx, s.platformScope(), mappingID)

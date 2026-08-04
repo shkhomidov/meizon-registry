@@ -174,7 +174,7 @@ func (s *Service) AcceptMappingProposals(ctx context.Context, actorID gid.GID, r
 		if err != nil {
 			return err
 		}
-		if _, _, err := s.requireDraft(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
+		if _, _, err := s.requireMappable(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
 			return err
 		}
 
@@ -292,7 +292,7 @@ func (s *Service) RejectMappingProposals(ctx context.Context, actorID gid.GID, r
 		if err != nil {
 			return err
 		}
-		if _, _, err := s.requireDraft(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
+		if _, _, err := s.requireMappable(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
 			return err
 		}
 		for _, id := range ids {
