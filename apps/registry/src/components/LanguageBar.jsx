@@ -18,7 +18,7 @@ const COMMON = [
 const LABEL = Object.fromEntries(COMMON)
 const label = (code) => LABEL[code] || code
 
-export default function LanguageBar({ refId, editable, aiConfigured }) {
+export default function LanguageBar({ refId, editable, aiConfigured, selected = '', onSelect }) {
   const [view, setView] = useState(null)
   const [adding, setAdding] = useState(false)
   const [job, setJob] = useState(null)
@@ -65,28 +65,33 @@ export default function LanguageBar({ refId, editable, aiConfigured }) {
     try { await api.downloadFramework(refId, lang) } catch (e) { setError(e.message) }
   }
 
+  // A chip's view value: the source language shows the un-overlaid record (""),
+  // every other language shows its translation overlay.
+  const viewValue = (l) => (l.isSource ? '' : l.language)
+  const pick = (l) => onSelect && onSelect(viewValue(l))
+
   return (
     <div className="flex flex-wrap items-center gap-2 mb-4">
       <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted flex items-center gap-1">
         <Languages size={12} /> languages
       </span>
 
-      {/* English leads: it is the canonical record — what cross-mapping reads
-          and what most reviewers want — so it should not be hunted for at the
-          end of a row of chips. */}
-      {ordered.map((l) => (
-        <button key={l.language} onClick={() => download(l.isSource ? '' : l.language)}
-          title={l.isSource
-            ? 'Download the source-language file'
-            : `Download ${label(l.language)} (${l.nodes} nodes)`}
-          className="inline-flex items-center gap-1 hover:opacity-80">
-          <Badge tone={l.language === view.canonical ? 'blue' : l.isSource ? 'green' : 'grey'}>
-            {label(l.language)}
-            {l.language === view.canonical ? ' · canonical' : ''}
-            {l.isSource && l.language !== view.canonical ? ' · source' : ''}
-          </Badge>
-        </button>
-      ))}
+      {/* Clicking a chip switches the whole framework view (structure, audit,
+          …) into that language; the source chip returns to the canonical record. */}
+      {ordered.map((l) => {
+        const active = viewValue(l) === selected
+        return (
+          <button key={l.language} onClick={() => pick(l)}
+            title={active ? 'Currently viewing' : `View in ${label(l.language)}${l.isSource ? '' : ` (${l.nodes} nodes)`}`}
+            className={`inline-flex items-center gap-1 rounded-badge transition-shadow ${active ? 'ring-1 ring-sage' : 'hover:opacity-80'}`}>
+            <Badge tone={l.language === view.canonical ? 'blue' : l.isSource ? 'green' : 'grey'}>
+              {label(l.language)}
+              {l.language === view.canonical ? ' · canonical' : ''}
+              {l.isSource && l.language !== view.canonical ? ' · source' : ''}
+            </Badge>
+          </button>
+        )
+      })}
 
       {ordered.length === 0 && (
         <span className="text-[12px] text-muted">source language unknown — only the stored text is available</span>
@@ -97,7 +102,7 @@ export default function LanguageBar({ refId, editable, aiConfigured }) {
           {job ? 'Translating…' : 'Add language'}
         </Button>
       )}
-      <button onClick={() => download('')} title="Download the canonical JSON"
+      <button onClick={() => download(selected)} title={`Download the ${selected ? label(selected) : 'canonical'} JSON`}
         className="p-1 rounded text-muted hover:text-sage hover:bg-inset"><Download size={14} /></button>
 
       {error && <span className="text-[12px] text-st-red">{error}</span>}

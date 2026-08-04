@@ -3,10 +3,10 @@
 // template, toggles its draft/ready status, edits questions, and previews the
 // audit as a chat. The template is generated per framework VERSION (draft or
 // published) and lives beside the requirements it audits.
-import { useState, useEffect } from 'react'
-import { Sparkles, MessageSquare, ListChecks, Trash2, Save, CheckCircle2, Undo2, Languages } from 'lucide-react'
+import { useState } from 'react'
+import { Sparkles, MessageSquare, ListChecks, Trash2, Save, CheckCircle2, Undo2 } from 'lucide-react'
 import { api } from '../lib/api.js'
-import { Card, Button, Badge, Textarea, EmptyState, Tabs, Select } from './ui.jsx'
+import { Card, Button, Badge, Textarea, EmptyState, Tabs } from './ui.jsx'
 import QAPreview from './QAPreview.jsx'
 
 export function countQuestions(template) {
@@ -27,33 +27,15 @@ export function indexByRequirement(template) {
   return by
 }
 
-export default function QATab({ refId, template, editable, onChanged }) {
+export default function QATab({ refId, template, editable, language = '', onChanged }) {
   const [tab, setTab] = useState('edit')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [coverage, setCoverage] = useState(null)
-  // Language viewing: '' is the canonical (editable) template; a code shows that
-  // translation read-only. Available languages come from the framework's own.
-  const [lang, setLang] = useState('')
-  const [langs, setLangs] = useState([])
-  const [translated, setTranslated] = useState(null) // fetched non-canonical view
 
-  useEffect(() => {
-    api.translations(refId)
-      .then((v) => setLangs((v?.languages || []).map((l) => l.language).filter((l) => l && l !== v.canonical)))
-      .catch(() => {})
-  }, [refId])
-
-  useEffect(() => {
-    if (!lang) { setTranslated(null); return }
-    let live = true
-    api.qaTemplate(refId, lang).then((t) => { if (live) setTranslated(t) }).catch((e) => { if (live) setError(e.message) })
-    return () => { live = false }
-  }, [refId, lang])
-
-  // The canonical template is editable; a translation is a read-only view.
-  const viewing = lang ? translated : template
-  const canEdit = editable && !lang
+  // The parent supplies the template already in the viewed language; a
+  // translation is shown read-only (the canonical stays fully editable).
+  const canEdit = editable && !language
 
   async function generate() {
     setError(''); setBusy(true)
@@ -97,17 +79,8 @@ export default function QATab({ refId, template, editable, onChanged }) {
 
       <div className="flex items-center gap-3 flex-wrap">
         <Badge tone={ready ? 'green' : 'amber'}>{ready ? 'ready' : 'draft'}</Badge>
-        <span className="text-[12.5px] text-muted">{countQuestions(viewing || template)} questions · {template.model || 'ai'}</span>
-        {langs.length > 0 && (
-          <label className="flex items-center gap-1.5 text-[12px] text-muted">
-            <Languages size={13} />
-            <Select value={lang} onChange={(e) => setLang(e.target.value)}>
-              <option value="">Canonical</option>
-              {langs.map((l) => <option key={l} value={l}>{l}</option>)}
-            </Select>
-          </label>
-        )}
-        {lang && <Badge tone="grey">translation · read-only</Badge>}
+        <span className="text-[12.5px] text-muted">{countQuestions(template)} questions · {template.model || 'ai'}</span>
+        {language && <Badge tone="grey">{language} · read-only</Badge>}
         {canEdit && (
           <div className="ml-auto flex items-center gap-2">
             {ready
@@ -118,12 +91,10 @@ export default function QATab({ refId, template, editable, onChanged }) {
         )}
       </div>
 
-      {lang && !translated ? (
-        <div className="text-muted text-[13px]">Loading {lang} translation…</div>
-      ) : lang ? (
+      {language ? (
         // A translation is view-only. The chat preview scores against canonical
-        // question ids, so it stays on the canonical template.
-        <Editor template={viewing} editable={false} onChanged={onChanged} />
+        // question ids, so it is only offered on the canonical template.
+        <Editor template={template} editable={false} onChanged={onChanged} />
       ) : (
         <>
           <Tabs tabs={[

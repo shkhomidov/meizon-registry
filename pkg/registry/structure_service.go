@@ -64,14 +64,57 @@ type (
 )
 
 // StructureOf assembles the full hierarchy (with mapping state) of a version.
-func (s *Service) StructureOf(ctx context.Context, versionID gid.GID) ([]StructureCategory, error) {
+// StructureOf returns a version's category/requirement tree. When language is a
+// non-empty, non-source code, the stored translation overlay is applied so the
+// console can display the framework in that language (text only — refs, mappings
+// and control links are shared across languages and never change).
+func (s *Service) StructureOf(ctx context.Context, versionID gid.GID, language string) ([]StructureCategory, error) {
 	var out []StructureCategory
 	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
 		tree, err := s.structureOfTx(ctx, conn, versionID)
+		if err != nil {
+			return err
+		}
+		if language != "" {
+			var overlay coredata.FrameworkTranslations
+			if err := overlay.LoadAllByVersionAndLanguage(ctx, conn, s.platformScope(), versionID, language); err != nil {
+				return err
+			}
+			applyStructureOverlay(tree, overlay)
+		}
 		out = tree
-		return err
+		return nil
 	})
 	return out, err
+}
+
+// applyStructureOverlay swaps translated names/descriptions into the tree by ref.
+// A ref with no translation keeps its canonical text.
+func applyStructureOverlay(tree []StructureCategory, overlay coredata.FrameworkTranslations) {
+	byKey := map[string]*coredata.FrameworkTranslation{}
+	for _, t := range overlay {
+		byKey[t.NodeKind+"\x00"+t.NodeRef] = t
+	}
+	pick := func(kind, ref string) *coredata.FrameworkTranslation { return byKey[kind+"\x00"+ref] }
+
+	for ci := range tree {
+		if t := pick(coredata.TranslationNodeCategory, tree[ci].Code); t != nil && t.Name != "" {
+			tree[ci].Name = t.Name
+		}
+		for ri := range tree[ci].Requirements {
+			r := &tree[ci].Requirements[ri]
+			t := pick(coredata.TranslationNodeRequirement, r.Code)
+			if t == nil {
+				continue
+			}
+			if t.Name != "" {
+				r.Title = t.Name
+			}
+			if t.Description != "" {
+				r.Description = t.Description
+			}
+		}
+	}
 }
 
 func (s *Service) structureOfTx(ctx context.Context, conn pg.Querier, versionID gid.GID) ([]StructureCategory, error) {

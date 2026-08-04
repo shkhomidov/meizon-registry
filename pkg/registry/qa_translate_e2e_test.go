@@ -165,6 +165,32 @@ func TestQATemplateTranslatedWithFramework(t *testing.T) {
 		}
 	}
 
+	// The structure view also switches into the translated language.
+	tree, err := svc.StructureOf(ctx, created.VersionID, "fr")
+	if err != nil {
+		t.Fatalf("structure fr: %v", err)
+	}
+	var sawReq bool
+	for _, c := range tree {
+		if c.Code != "A.5" {
+			continue
+		}
+		if !strings.HasPrefix(c.Name, "fr:") {
+			t.Fatalf("category name not translated: %q", c.Name)
+		}
+		for _, r := range c.Requirements {
+			if r.Code == "A.5.1" {
+				sawReq = true
+				if !strings.HasPrefix(r.Title, "fr:") {
+					t.Fatalf("requirement title not translated: %q", r.Title)
+				}
+			}
+		}
+	}
+	if !sawReq {
+		t.Fatal("A.5.1 not present in the fr structure view")
+	}
+
 	// A language that was never translated falls back to canonical.
 	de, err := svc.QATemplateViewFor(ctx, "iso-27001", "de")
 	if err != nil {

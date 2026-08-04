@@ -118,7 +118,7 @@ func TestStagedGenerationJob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
-	tree, _ := svc.StructureOf(ctx, created.VersionID)
+	tree, _ := svc.StructureOf(ctx, created.VersionID, "")
 	if len(tree) != 1 || tree[0].Code != "AC" {
 		t.Fatalf("flat category did not convert: %+v", tree)
 	}

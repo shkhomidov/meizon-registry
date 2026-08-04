@@ -32,12 +32,15 @@ export default function FrameworkDetail() {
   const [aiConfigured, setAiConfigured] = useState(false)
   const [frameworks, setFrameworks] = useState([])
   const [qa, setQa] = useState(null) // the audit template for the latest version, or null
+  // The language the framework is being VIEWED in: '' is the canonical/source
+  // record; a code shows that translation across the tabs (read-only).
+  const [viewLang, setViewLang] = useState('')
 
   const load = useCallback(async () => {
     setError('')
     try {
       const [detail, tree, lib, pols] = await Promise.all([
-        api.getFramework(ref), api.getStructure(ref),
+        api.getFramework(ref), api.getStructure(ref, viewLang),
         api.controlsLibrary(ref), api.policyTemplates(ref),
       ])
       setData(detail)
@@ -45,12 +48,12 @@ export default function FrameworkDetail() {
       setControls(lib)
       setPolicies(pols)
     } catch (e) { setError(e.message) }
-  }, [ref])
-  // The audit template loads independently: a 404 (none generated yet) is the
-  // normal empty state, not an error.
+  }, [ref, viewLang])
+  // The audit template loads independently, in the viewed language: a 404 (none
+  // generated yet) is the normal empty state, not an error.
   const loadQA = useCallback(async () => {
-    try { setQa(await api.qaTemplate(ref)) } catch { setQa(null) }
-  }, [ref])
+    try { setQa(await api.qaTemplate(ref, viewLang)) } catch { setQa(null) }
+  }, [ref, viewLang])
   useEffect(() => { load() }, [load])
   useEffect(() => { loadQA() }, [loadQA])
   useEffect(() => {
@@ -130,7 +133,13 @@ export default function FrameworkDetail() {
         {latest?.contentHash && <span className="font-mono text-[11px] text-muted truncate">{latest.contentHash}</span>}
       </div>
 
-      <LanguageBar refId={ref} editable={canAuthor(viewer)} aiConfigured={aiConfigured} />
+      <LanguageBar refId={ref} editable={canAuthor(viewer)} aiConfigured={aiConfigured}
+        selected={viewLang} onSelect={setViewLang} />
+      {viewLang && (
+        <div className="text-[12px] text-muted mb-4 -mt-2">
+          Viewing the <span className="text-text">{viewLang}</span> translation — read-only. Switch back to the source language to edit.
+        </div>
+      )}
 
       <Tabs
         active={tab}
@@ -148,13 +157,13 @@ export default function FrameworkDetail() {
       />
 
       {tab === 'structure' && (
-        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer)}
+        <StructureTree refId={ref} structure={structure} editable={draft && canAuthor(viewer) && !viewLang}
           onChanged={() => { load(); loadQA() }}
-          qaByReq={indexByRequirement(qa)} qaTemplateId={qa?.templateId} qaEditable={canAuthor(viewer)} onQuestionChanged={loadQA} />
+          qaByReq={indexByRequirement(qa)} qaTemplateId={qa?.templateId} qaEditable={canAuthor(viewer) && !viewLang} onQuestionChanged={loadQA} />
       )}
 
       {tab === 'qa' && (
-        <QATab refId={ref} template={qa} editable={canAuthor(viewer)} onChanged={loadQA} />
+        <QATab refId={ref} template={qa} editable={canAuthor(viewer)} language={viewLang} onChanged={loadQA} />
       )}
 
       {tab === 'mappings' && (
