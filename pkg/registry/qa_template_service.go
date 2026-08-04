@@ -447,7 +447,7 @@ func buildRequirementQuestions(reqRef string, base int, gqs []qaGenQuestion) []f
 			// always answerable and always scoreable manually.
 			qtype = fwqa.TypeFreeText
 		}
-		built = append(built, fwqa.Question{
+		q := fwqa.Question{
 			ID:               fmt.Sprintf("q-%s-%d", reqRef, i+1),
 			Order:            base + i + 1,
 			RequirementRef:   reqRef,
@@ -460,10 +460,73 @@ func buildRequirementQuestions(reqRef string, base int, gqs []qaGenQuestion) []f
 			Options:          gq.Options,
 			Assessment:       sanitizeAssessment(gq.Assessment),
 			FollowUps:        resolveFollowUps(reqRef, i, gqs),
-		})
+		}
+		// A question with no text fails validation; fall back to the intent, then
+		// to a generic prompt, so an occasional empty text cannot sink the batch.
+		if strings.TrimSpace(q.Text) == "" {
+			if intent := strings.TrimSpace(q.Intent); intent != "" {
+				q.Text = intent
+			} else {
+				q.Text = "Provide evidence of compliance for requirement " + reqRef + "."
+			}
+		}
+		repairQuestionType(&q)
+		built = append(built, q)
 	}
 	reconcileConditionals(built)
 	return built
+}
+
+// repairQuestionType makes a question satisfy its type's invariants so the whole
+// template can never be sunk by one malformed question. The model may pick a type
+// whose required data it does not (or cannot, given the exchange shape) supply —
+// e.g. an attestation carries no statement field, so every attestation would
+// otherwise fail validation. Rather than reject the entire generation, coerce the
+// question to a valid, meaningful shape.
+func repairQuestionType(q *fwqa.Question) {
+	switch q.Type {
+	case fwqa.TypeSingleChoice, fwqa.TypeMultiChoice:
+		q.Options = cleanOptions(q.Options)
+		if len(q.Options) == 0 {
+			// A choice with no usable options is unanswerable; free text always is.
+			q.Type = fwqa.TypeFreeText
+		}
+	case fwqa.TypeAttestation:
+		if q.Attestation == nil || strings.TrimSpace(q.Attestation.Statement) == "" {
+			// The model asked for an attestation but supplied no statement (the
+			// exchange shape has no field for one). Use the question text as the
+			// statement so it stays a valid, meaningful attestation.
+			if stmt := strings.TrimSpace(q.Text); stmt != "" {
+				q.Attestation = &fwqa.Attestation{Statement: stmt}
+			} else {
+				q.Type = fwqa.TypeFreeText
+			}
+		}
+	case fwqa.TypeScale:
+		q.ScaleRef = "" // bind to the template-level scale; never a dangling ref
+	case fwqa.TypeNumeric:
+		if q.Min != nil && q.Max != nil && *q.Min > *q.Max {
+			q.Min, q.Max = nil, nil
+		}
+	}
+}
+
+// cleanOptions drops empty and duplicate option values so a choice question meets
+// the validator's uniqueness/non-empty rule.
+func cleanOptions(in []fwqa.Option) []fwqa.Option {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]fwqa.Option, 0, len(in))
+	for _, o := range in {
+		if strings.TrimSpace(o.Value) == "" || seen[o.Value] {
+			continue
+		}
+		seen[o.Value] = true
+		out = append(out, o)
+	}
+	return out
 }
 
 // resolveFollowUps turns the model's index-based branches for the question at
@@ -679,5 +742,23 @@ func sanitizeAssessment(a *fwqa.Assessment) *fwqa.Assessment {
 		return nil
 	}
 	a.Criteria = docextract.Sanitize(a.Criteria)
+	// Drop any rule the model got wrong (an empty/unknown verdict, an unparseable
+	// or unknown-variable condition) rather than letting one bad rule fail the
+	// whole template. A question with no rules is still valid.
+	a.Rules = keepValidRules(a.Rules)
+	a.Thresholds = keepValidRules(a.Thresholds)
 	return a
+}
+
+func keepValidRules(rules []fwqa.Rule) []fwqa.Rule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]fwqa.Rule, 0, len(rules))
+	for _, r := range rules {
+		if fwqa.RuleOK(r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }

@@ -148,6 +148,14 @@ func validateTypeSpecifics(q *Question, scaleKinds map[string]bool) error {
 	return nil
 }
 
+// RuleOK reports whether a rule is usable: its condition parses, references only
+// known variables, and it assigns a known verdict. Generation uses it to drop a
+// single malformed rule (a common model slip is an empty verdict) rather than let
+// it fail validation and sink the whole template.
+func RuleOK(r Rule) bool {
+	return CheckExpr(r.When) == nil && checkVars(r.When) == nil && KnownVerdicts[r.Verdict]
+}
+
 func validateAssessment(q *Question) error {
 	if q.Assessment == nil {
 		return nil

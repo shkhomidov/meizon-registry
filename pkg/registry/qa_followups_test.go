@@ -140,6 +140,66 @@ func TestAssembleDemotesOrphanConditional(t *testing.T) {
 	}
 }
 
+// TestAssembleRepairsUnsatisfiableTypes: a model that picks a type it cannot
+// satisfy (an attestation with no statement, a choice with no options) must not
+// sink the whole template — the questions are coerced to a valid shape and the
+// template validates. This is the pci-dss regression: one attestation question
+// failed validation and lost a 331-requirement generation.
+func TestAssembleRepairsUnsatisfiableTypes(t *testing.T) {
+	doc := oneReqDoc(fwflat.Requirement{Ref: "5.2.2", Category: "A.5", Name: "Access"})
+	byReq := map[string][]qaGenQuestion{
+		"5.2.2": {
+			{Text: "Management attests that access reviews are performed quarterly.", Type: fwqa.TypeAttestation},
+			{Text: "Which access model is used?", Type: fwqa.TypeSingleChoice}, // no options
+		},
+	}
+
+	tpl := assemble(t, doc, byReq)
+	if err := tpl.Validate(); err != nil {
+		t.Fatalf("template must validate after repairing unsatisfiable types: %v", err)
+	}
+
+	att := findQuestion(tpl, "q-5.2.2-1")
+	if att == nil || att.Type != fwqa.TypeAttestation || att.Attestation == nil || att.Attestation.Statement == "" {
+		t.Fatalf("attestation should keep its type with a synthesized statement, got %+v", att)
+	}
+	choice := findQuestion(tpl, "q-5.2.2-2")
+	if choice == nil || choice.Type != fwqa.TypeFreeText {
+		t.Fatalf("an optionless choice should be coerced to free_text, got %+v", choice)
+	}
+}
+
+// TestAssembleDropsBadAssessmentRules: a model rule with an empty/unknown verdict
+// (or an unparseable condition) is dropped, not allowed to fail the whole
+// template. This is the pci-dss q-8.1.1 regression: `unknown verdict ""`.
+func TestAssembleDropsBadAssessmentRules(t *testing.T) {
+	doc := oneReqDoc(fwflat.Requirement{Ref: "8.1.1", Category: "A.5", Name: "Auth"})
+	byReq := map[string][]qaGenQuestion{
+		"8.1.1": {
+			{
+				Text: "Is unique authentication enforced?", Type: fwqa.TypeYesNo,
+				Assessment: &fwqa.Assessment{Rules: []fwqa.Rule{
+					{When: "answer == 'yes'", Verdict: "compliant"}, // good — kept
+					{When: "answer == 'no'", Verdict: ""},           // empty verdict — dropped
+					{When: "nonsense (((", Verdict: "compliant"},    // unparseable — dropped
+				}},
+			},
+		},
+	}
+
+	tpl := assemble(t, doc, byReq)
+	if err := tpl.Validate(); err != nil {
+		t.Fatalf("template must validate after dropping bad rules: %v", err)
+	}
+	q := findQuestion(tpl, "q-8.1.1-1")
+	if q == nil || q.Assessment == nil || len(q.Assessment.Rules) != 1 {
+		t.Fatalf("only the one valid rule should remain, got %+v", q.Assessment)
+	}
+	if q.Assessment.Rules[0].Verdict != "compliant" {
+		t.Fatalf("wrong rule kept: %+v", q.Assessment.Rules[0])
+	}
+}
+
 // TestSynthesizedQuestionValidates: the last-resort baseline for an empty
 // requirement is itself a valid, scoreable question.
 func TestSynthesizedQuestionValidates(t *testing.T) {
