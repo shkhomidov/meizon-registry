@@ -33,7 +33,7 @@ const (
 func (f *Framework) Validate() error {
 	v := validator.New()
 
-	v.Check(f.SchemaVersion, "schemaVersion", validator.Required(), validator.OneOf(SchemaVersion, SchemaVersion2))
+	v.Check(f.SchemaVersion, "schemaVersion", validator.Required(), validator.OneOf(SchemaVersion, SchemaVersion2, SchemaVersion3))
 	v.Check(f.ID, "id", validator.Required(), validator.MaxLen(idMaxLength), validator.NoNewLine(), validator.PrintableText())
 	v.Check(f.Name, "name", validator.Required(), validator.MaxLen(nameMaxLength), validator.NoNewLine())
 	v.Check(f.ShortName, "shortName", validator.MaxLen(nameMaxLength), validator.NoNewLine())
@@ -52,7 +52,9 @@ func (f *Framework) Validate() error {
 	v.Check(f.Description, "description", validator.MaxLen(descriptionMaxLength))
 
 	switch f.SchemaVersion {
-	case SchemaVersion2:
+	case SchemaVersion2, SchemaVersion3:
+		// v3 is v2 with cross-mappings distributed separately; its document shape
+		// (categories → requirements) is identical, so it validates as v2.
 		f.validateV2(v)
 	default:
 		f.validateV1(v)

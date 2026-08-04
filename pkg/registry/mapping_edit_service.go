@@ -207,8 +207,7 @@ func (s *Service) DeleteMapping(ctx context.Context, actorID gid.GID, ref, nodeK
 }
 
 // mappingEditScope authorizes a mapping edit and returns the version it applies
-// to. DRAFT-only: a published version's mapping codes are inside its signed
-// bundle, so editing one would invalidate the signature that vouches for it.
+// to. Unlike a structure edit it is not draft-only — see requireMappable.
 func (s *Service) mappingEditScope(ctx context.Context, tx pg.Tx, actorID gid.GID, ref string) (gid.GID, error) {
 	scope := s.platformScope()
 
@@ -220,8 +219,43 @@ func (s *Service) mappingEditScope(ctx context.Context, tx pg.Tx, actorID gid.GI
 	if err != nil {
 		return gid.Nil, err
 	}
-	if _, _, err := s.requireDraft(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
+	if _, _, err := s.requireMappable(ctx, tx, actorID, versionID, iam.ActionControlEdit); err != nil {
 		return gid.Nil, err
 	}
 	return versionID, nil
+}
+
+// requireMappable authorizes a cross-mapping edit. Unlike requireDraft (used for
+// structure edits, which change the signed bundle and so stay draft-only), a
+// mapping edit is also allowed on a PUBLISHED version — but only a v3 one.
+//
+// A v3 bundle does not inline its cross-mappings (they are distributed as a
+// separate signed mapping set), so adding or removing one cannot change the
+// bundle bytes the framework signature vouches for. Mappings on a published
+// framework are shipped by re-publishing the mapping set, never by re-signing
+// the framework. A legacy v2 bundle DOES embed its mappings, so editing one
+// there would break the signature; that case still needs a new draft version.
+func (s *Service) requireMappable(ctx context.Context, conn pg.Querier, actorID, versionID gid.GID, action string) (coredata.FrameworkVersion, coredata.Framework, error) {
+	version, framework, err := s.loadVersionAndFramework(ctx, conn, s.platformScope(), versionID)
+	if err != nil {
+		return version, framework, err
+	}
+	if err := s.authorize(ctx, conn, actorID, action, framework.Region, framework.ID); err != nil {
+		return version, framework, err
+	}
+	switch version.Status {
+	case coredata.FrameworkVersionStatusDraft:
+		return version, framework, nil
+	case coredata.FrameworkVersionStatusPublished:
+		if version.BundleSchema == fwschema.SchemaVersion3 {
+			return version, framework, nil
+		}
+		return version, framework, fmt.Errorf(
+			"%w: this framework was published with an older bundle format that embeds its mappings; publish a new version to change them",
+			ErrInvalidTransition)
+	default:
+		return version, framework, fmt.Errorf(
+			"%w: mappings can change on a draft or a published framework, not while %s",
+			ErrInvalidTransition, version.Status)
+	}
 }

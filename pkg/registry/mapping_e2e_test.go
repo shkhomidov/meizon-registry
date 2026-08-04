@@ -116,13 +116,16 @@ func TestCrossMappingStubResolution(t *testing.T) {
 		t.Fatalf("expected 2 iso + 1 soc2 stubs, got %+v", counts)
 	}
 
-	// The published v2 bundle is signed and carries the mappings by code.
+	// The published bundle is signed and verifies. From v3 the mappings are not
+	// inside it — they are tracked as cross-mapping rows and distributed as
+	// separate mapping sets — so resolution state is read from the structure
+	// view below, not the bundle.
 	bundle, err := svc.ExportBundle(ctx, pci.VersionID)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}
 	if !bundle.IsV2() || bundle.Signature == nil {
-		t.Fatal("expected signed v2 bundle")
+		t.Fatal("expected a signed v2-family bundle")
 	}
 	keys, _ := svc.VerificationKeys(ctx)
 	if err := bundle.Verify(keys); err != nil {
@@ -205,3 +208,77 @@ func TestCrossMappingStubResolution(t *testing.T) {
 }
 
 type registryCoverage struct{ total, resolved int }
+
+// TestMapPublishedV3Framework pins the "map anytime, update, republish" behavior:
+// a v3 framework (the default since Phase 16) can be cross-mapped AFTER it is
+// published, and doing so must not disturb its own signed bundle — the mappings
+// ride in a separate mapping set, not the framework signature.
+func TestMapPublishedV3Framework(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	if _, err := svc.BootstrapSuperAdmin(ctx, req(superAdminEmail, "Root")); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	superID := mustID(t, svc, superAdminEmail)
+	mustCreateUser(t, svc, superID, "mod@meizon.test", "Global Moderator", "moderator", []string{"GLOBAL"})
+	modID := mustID(t, svc, "mod@meizon.test")
+	if err := svc.GenerateSigningKey(ctx, superID, "reg-2026"); err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	// Import + publish ISO (author = superadmin, approver = moderator). A plain
+	// import with no explicit schema publishes as v3.
+	iso, err := svc.ImportFrameworkDoc(ctx, superID, isoDoc())
+	if err != nil {
+		t.Fatalf("import iso: %v", err)
+	}
+	if err := svc.Submit(ctx, superID, iso.VersionID); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := svc.Approve(ctx, modID, iso.VersionID, "ok"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := svc.Publish(ctx, modID, iso.VersionID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// The framework's own signature before any mapping is added.
+	before, err := svc.ExportBundle(ctx, iso.VersionID)
+	if err != nil {
+		t.Fatalf("export before: %v", err)
+	}
+	if before.Signature == nil {
+		t.Fatal("published bundle must be signed")
+	}
+	hashBefore := before.Signature.ContentHash
+
+	// Add a cross-mapping to the PUBLISHED framework. Before requireMappable this
+	// failed with "structure can only change in a DRAFT".
+	if _, err := svc.AddItemMapping(ctx, superID, registry.AddItemMappingRequest{
+		VersionID:       iso.VersionID,
+		ItemCode:        "A.5.15",
+		Relation:        string(fwschema.RelationEquivalent),
+		TargetFramework: "soc-2",
+		TargetVersion:   "2017",
+		TargetItem:      "CC6.1",
+		Notes:           "added after publish",
+	}); err != nil {
+		t.Fatalf("mapping a published v3 framework must be allowed: %v", err)
+	}
+
+	// The framework's own signed bundle must be byte-for-byte unchanged — a v3
+	// bundle does not carry its mappings, so the signature still verifies.
+	after, err := svc.ExportBundle(ctx, iso.VersionID)
+	if err != nil {
+		t.Fatalf("export after: %v", err)
+	}
+	if after.Signature == nil || after.Signature.ContentHash != hashBefore {
+		t.Fatalf("adding a mapping changed the framework's signed content: %q -> %q",
+			hashBefore, after.Signature.ContentHash)
+	}
+	keys, _ := svc.VerificationKeys(ctx)
+	if err := after.Verify(keys); err != nil {
+		t.Fatalf("framework signature must remain valid after mapping: %v", err)
+	}
+}

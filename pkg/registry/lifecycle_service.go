@@ -246,9 +246,18 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 		// what we record as having been signed cannot disagree. Assembly reads
 		// this field, so setting it afterwards would sign one shape and claim
 		// another — a mismatch that surfaces only at the consumer.
-		if version.BundleSchema == "" {
-			version.BundleSchema = fwschema.SchemaVersion3
-		}
+		//
+		// A version reaching publish for the first time has no signature to
+		// protect, so it is always signed under v3: its cross-mappings are
+		// distributed as separate signed mapping sets rather than baked into the
+		// bundle, which is what lets them be updated and re-published without
+		// re-signing the framework. We force v3 rather than only defaulting an
+		// empty value because a draft inherits the framework_versions table's
+		// legacy '2.0' column default on insert — that value predates v3 and must
+		// not pin new publishes to the old inline-mapping format. Existing v2
+		// publishes keep their signed schema; only IN_REVIEW/APPROVED drafts
+		// reach here, and none of them has been signed yet.
+		version.BundleSchema = fwschema.SchemaVersion3
 
 		bundle, err := s.assembleBundle(ctx, tx, scope, framework, version)
 		if err != nil {
