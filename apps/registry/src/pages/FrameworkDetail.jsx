@@ -132,8 +132,6 @@ export default function FrameworkDetail() {
 
       <LanguageBar refId={ref} editable={canAuthor(viewer)} aiConfigured={aiConfigured} />
 
-      {draft && canAuthor(viewer) && <Stepper tab={tab} setTab={setTab} />}
-
       <Tabs
         active={tab}
         onChange={setTab}
@@ -228,37 +226,6 @@ export default function FrameworkDetail() {
         </Card>
       )}
     </Page>
-  )
-}
-
-// Stepper — the step-by-step authoring rail shown on drafts. Each step maps to
-// a tab; auditors move left to right: structure → mappings → controls &
-// evidence → policies → review, then submit.
-const STEPS = [
-  { key: 'structure', label: '1 Structure' },
-  { key: 'structure-map', tab: 'structure', label: '2 Mappings' },
-  { key: 'catalog', label: '3 Controls & evidence' },
-  { key: 'policies', label: '4 Policies' },
-  { key: 'overview', label: '5 Review' },
-]
-
-function Stepper({ tab, setTab }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 mb-4">
-      {STEPS.map((s, i) => {
-        const target = s.tab || s.key
-        const active = tab === target && (s.tab ? false : true)
-        return (
-          <span key={s.key} className="flex items-center gap-1.5">
-            {i > 0 && <span className="text-subtle text-[11px]">→</span>}
-            <button onClick={() => setTab(target)}
-              className={`font-mono text-[11px] uppercase tracking-[0.06em] px-2 py-1 rounded-badge border transition-colors ${active ? 'text-sage border-sage' : 'text-muted border-border hover:text-text'}`}>
-              {s.label}
-            </button>
-          </span>
-        )
-      })}
-    </div>
   )
 }
 
