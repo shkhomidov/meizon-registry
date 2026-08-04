@@ -156,6 +156,14 @@ func (s *Service) StartTranslateJob(ctx context.Context, actorID gid.GID, ref, t
 			if qerr := s.translateQATemplate(ctx, client, setting, ref, targetLang); qerr != nil {
 				s.logger.WarnCtx(ctx, "framework translated but its audit template did not: "+qerr.Error())
 			}
+			// If the translated version is published, announce that its
+			// translations changed so a consumer re-fetches the available
+			// languages. Best-effort; unpublished versions are skipped inside.
+			if eerr := s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
+				return s.emitVersionArtifactEvent(ctx, tx, coredata.DistributionEventTranslationPublished, versionID)
+			}); eerr != nil {
+				s.logger.WarnCtx(ctx, "cannot announce translation on the change feed: "+eerr.Error())
+			}
 		}
 		job.finish(nil, nil, "", err)
 		if err == nil {

@@ -21,19 +21,19 @@ There are **two** API families, and they are not interchangeable:
 
 What each artifact supports **today**:
 
-| Artifact | On the distribution API? | Signed? | Translations over the wire? | How changes are announced |
+| Artifact | On the distribution API? | Signed? | Localized (`?lang`)? | How changes are announced |
 |---|---|---|---|---|
-| **Framework version** | ✅ `/frameworks/{id}/versions/{v}` (+ `/seed`) | ✅ ed25519 | ❌ canonical language only | `published` / `deprecated` change events |
-| **Cross-mapping set** | ✅ `/mappings/{s}/{sv}/{t}/{tv}` | ✅ ed25519 | n/a (refs only) | `mapping_published` / `mapping_deprecated` change events |
-| **Audit (QA) template** | ❌ **console-only** | ❌ | ✅ via console `?lang` | no distribution event — see §6 |
-| **Translations** | ❌ **console-only** (`?lang` on console reads) | ❌ | — | translation is a console job — see §7 |
+| **Framework version** | ✅ `/frameworks/{id}/versions/{v}` (+ `/seed`) | ✅ ed25519 (bundle) | ✅ `seed?lang` | `published` / `deprecated` events |
+| **Cross-mapping set** | ✅ `/mappings/{s}/{sv}/{t}/{tv}` | ✅ ed25519 | n/a (refs only) | `mapping_published` / `mapping_deprecated` events |
+| **Audit (QA) template** | ✅ `/frameworks/{id}/versions/{v}/qa` | ❌ (unsigned) | ✅ `qa?lang` | `qa_published` events |
+| **Translations** | ✅ `seed?lang` + `qa?lang` (+ languages discovery) | ❌ overlay | ✅ | `translation_published` events |
 
-> **Be honest with your GRC roadmap:** frameworks and mappings are fully
-> machine-syncable and cryptographically verifiable. **QA templates and
-> translations are authoring-side features and are not exposed over the
-> distribution API.** A GRC that needs them today must call the console API with
-> user credentials (§6, §7). §9 covers what it would take to distribute them
-> properly.
+All four are now machine-syncable over the bearer-token distribution API. The
+**signed** artifacts are the framework bundle and the mapping set (verify those
+for integrity); the **seed**, **QA template**, and **translation overlay** are
+derived/unsigned — a consumer that has verified the canonical bundle can trust
+the derived shapes, otherwise it is trusting TLS + the operator (same posture as
+the seed has always had).
 
 The contract in one line: **the registry publishes signed, immutable framework
 versions and mapping sets; a consumer verifies every signature before importing,
@@ -94,11 +94,13 @@ the main reason those two are flagged as "not machine-syncable yet."
   ┌─ every run after ────────────────────────────────────────────┐
   │  GET /changes?since=<cursor> → what changed, in commit order  │
   │    dispatch on kind:                                          │
-  │      published          → fetch + verify + import framework    │
-  │      deprecated         → mark held framework retired          │
-  │      mapping_published  → fetch + verify + import mapping set   │
-  │      mapping_deprecated → retire mapping set                   │
-  │      (unknown kind)     → ignore; the set will grow            │
+  │      published             → fetch+verify+import framework      │
+  │      deprecated            → mark held framework retired        │
+  │      mapping_published     → fetch+verify+import mapping set    │
+  │      mapping_deprecated    → retire mapping set                 │
+  │      qa_published          → fetch qa[?lang] for that version   │
+  │      translation_published → re-fetch languages + seed?lang     │
+  │      (unknown kind)        → ignore; the set will grow          │
   │  persist nextSeq ONLY after the whole page is processed        │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -173,13 +175,22 @@ curl -H "Authorization: Bearer $TOKEN" \
 `3.0` (same hierarchy but mappings stripped out into separate signed mapping
 sets — see §4). **Branch on `schemaVersion`.**
 
-### 3.4 `GET /frameworks/{id}/versions/{version}/seed` — flat import shape
+### 3.4 `GET /frameworks/{id}/versions/{version}/seed[?lang=<code>]` — flat import shape
 
 The same content flattened to `{ id, name, controls:[{id,name,description}] }` —
 convenient for a direct import once you have verified the bundle. **The seed drops
 rich fields** (guidance, mappings, itemType, citations, tags…) and carries **no
 signature**; verify the bundle and derive the seed from it, or accept that you are
 trusting TLS + the operator.
+
+**`?lang=<code>`** applies the stored translation overlay to the seed's
+names/descriptions (canonical fallback per node). This is how a GRC imports
+localized framework text — see §7. The signed **bundle** is always canonical
+(translating it would break its signature), so verify the bundle for integrity
+and take localized display text from `seed?lang`.
+
+Discovery: `GET /frameworks/{id}` lists each version's available `languages`
+(source + every translation), so you know which `?lang` values exist.
 
 ### 3.5 How a framework CHANGE reaches you
 
@@ -319,22 +330,28 @@ An **audit template** is an ordered, per-requirement questionnaire an auditor
 answers to establish compliance (question types, branching follow-ups, declarative
 scoring). It is generated from a framework's requirements and lives beside them.
 
-> **Distribution status: console-only.** QA templates are **not** exposed on the
-> `/api/registry/v1` distribution API — there is no bearer-token endpoint and they
-> are not part of the signed bundle or seed. A GRC consumes them today through the
-> **console API** with user credentials.
+> **Distribution status: available.** A published version's audit template is
+> served over the bearer-token distribution API, region/copyright-gated like the
+> bundle. Only a template marked **`ready`** is distributed — a draft is
+> authoring-in-progress and returns `404`.
 
-### 6.1 Reading a template (console API)
+### 6.1 `GET /frameworks/{id}/versions/{version}/qa[?lang=<code>]`
 
 ```
-GET /api/console/v1/frameworks/{ref}/qa-template?lang=<code>
-Cookie: <session>            # from POST /api/connect/v1/signin
+GET /api/registry/v1/frameworks/pci-dss-4.0.1/versions/latest/qa?lang=fr
+Authorization: Bearer mzt_<token>
 ```
 
 - `?lang` selects a translation; omit it (or pass the source language) for the
   canonical template. An untranslated language **falls back to canonical**.
-- Response is a `meizon-qa-template/v1` document plus `templateId`, `status`
-  (`draft` | `ready`), and `language`:
+- `404 {"error":"not found"}` if the version has no template marked `ready`;
+  `403 {"error":"not distributable"}` outside the token's region/copyright scope
+  or if the version is not `PUBLISHED`.
+- The template is **unsigned** (derived from live rows). Consumers that require
+  provenance should treat it like the seed — trust it because the framework
+  bundle it belongs to verified.
+- Response is a `meizon-qa-template/v1` document (the console read adds
+  `templateId`/`status` fields; the distribution read returns the plain schema):
 
 ```jsonc
 {
@@ -364,27 +381,29 @@ criteria, etc. are translated. Question `id`s are **per-language** (each languag
 copy has its own row ids) — bind questions to requirements by `requirementRef`,
 not by `id`, when cross-referencing languages.
 
-### 6.2 How a QA CHANGE happens
+### 6.2 How a QA CHANGE reaches you
 
-There is **no change-feed event** for QA templates. A template changes when:
+The change feed emits **`qa_published`** (framework + version) when a published
+version's template becomes distributable — either the template is marked `ready`
+on an already-published version, or a version is published while its template is
+already `ready`. On that event, fetch `…/versions/{version}/qa[?lang]`.
 
-| Trigger | Effect |
-|---|---|
-| Framework generated / imported (LLM configured) | Template auto-generated for the new draft. |
-| Requirement added manually | Its questions are generated and merged in. |
-| Author edits / regenerates / marks `ready` | Template content / status changes. |
-| Framework translated into language *L* (§7) | A language-*L* copy of the template is produced. |
+| Feed event `kind` | What happened | What the GRC does |
+|---|---|---|
+| `qa_published` | A ready audit template is available for this published version. | `GET …/versions/{version}/qa[?lang]`, import. |
 
-A GRC that mirrors QA should **re-poll** `GET …/qa-template` (per framework, per
-language) on its own cadence, keyed on the framework version it holds; there is no
-incremental cursor for QA. Because a template is tied to a framework **version**,
-a new published version means re-fetching its template.
+Authoring-side edits before publish (auto-generation on framework create,
+merge-on-requirement-add, regeneration) do **not** emit events — they are
+invisible until the version is published and the template is `ready`. Because a
+template is tied to a framework **version**, a new published version means
+re-fetching its template.
 
 ### 6.3 Scoring
 
 The registry exposes a single evaluator so a GRC can score consistently:
 `POST /api/console/v1/frameworks/{ref}/qa/evaluate` with `{questionId, answer}`
-returns the verdict, score, and which follow-ups fired. (Also console-only.)
+returns the verdict, score, and which follow-ups fired. (This scoring helper is
+still console-side; the template itself is distributed.)
 
 ---
 
@@ -396,38 +415,40 @@ refs, control links, cross-mappings — lives once, and every other language is 
 only the display text (names, descriptions, and — since the audit work — QA
 question text).
 
-> **Distribution status: console-only.** The signed bundle and the seed are
-> **canonical-language only** — there is no `lang` parameter anywhere on
-> `/api/registry/v1`, and translations are never embedded. A GRC that needs
-> localized text consumes it through the console API.
+> **Distribution status: available (as overlays).** Localized text is served over
+> the distribution API by applying the overlay to the **seed** and **QA template**
+> via `?lang`. The signed **bundle** stays canonical (translating it would break
+> the signature): verify the bundle for integrity, take localized display text
+> from `seed?lang` / `qa?lang`.
 
-### 7.1 Reading in a language (console API)
+### 7.1 Reading in a language over distribution
 
 | Read | Endpoint | Language |
 |---|---|---|
-| Flat framework export | `GET /api/console/v1/frameworks/{ref}/export?lang=<code>` | overlay applied; absent ⇒ canonical |
-| Structure (categories → requirements) | `GET …/frameworks/{ref}/structure?lang=<code>` | same |
-| Audit template | `GET …/frameworks/{ref}/qa-template?lang=<code>` | §6 |
-| Available languages | `GET …/frameworks/{ref}/translations` | lists language codes + node counts |
+| Flat framework (localized) | `GET …/frameworks/{id}/versions/{v}/seed?lang=<code>` | overlay applied; absent ⇒ canonical |
+| Audit template (localized) | `GET …/frameworks/{id}/versions/{v}/qa?lang=<code>` | §6 |
+| Available languages | `GET …/frameworks/{id}` → each version's `languages[]` | discovery |
 
 An untranslated language falls back to canonical text per node, so a partial
-translation is safe to request.
+translation is safe to request. (The console additionally offers `export?lang`
+and `structure?lang` for the authoring UI, but a GRC syncs off the distribution
+endpoints above.)
 
-### 7.2 How a translation CHANGE happens
+### 7.2 How a translation CHANGE reaches you
 
-Translation is a **background job on the console**, not a distributed artifact:
+The change feed emits **`translation_published`** (framework + version) when a
+translation job completes for a **published** version. On that event, re-read the
+version's `languages` (from `GET /frameworks/{id}`) and pull `seed?lang` /
+`qa?lang` for the new/changed language.
 
-```
-POST /api/console/v1/frameworks/{ref}/translations   { "language": "fr" }
-  → { "jobId": "…" }        # poll GET …/frameworks/generate/status/{jobId}
-```
+| Feed event `kind` | What happened | What the GRC does |
+|---|---|---|
+| `translation_published` | Translations changed for this published version. | Re-fetch `languages[]`, then `seed?lang` / `qa?lang` for each. |
 
-- The job translates the framework's names/descriptions **and** — since the audit
-  work — its QA audit template into the same language (§6). Only human text is
-  translated; refs, relations, verdicts and `when` expressions are preserved.
-- A GRC mirroring translations re-fetches `export?lang=` / `qa-template?lang=`
-  after a translation job completes (or on its own cadence). There is no
-  change-feed event for translations.
+Translating a framework is a single job that localizes the framework text **and**
+its audit template together; only human text is translated (refs, relations,
+verdicts and `when` expressions are preserved). Translations added to a *draft*
+version emit no event — they ship with the version's `published` event.
 
 ---
 
@@ -456,8 +477,8 @@ crash-safe cursor persistence (cursor saved only after a page is fully processed
 |---|---|---|---|---|
 | Framework | `/changes` → `published` / `deprecated` | `/frameworks/{id}/versions/{v}` (conditional, ETag) | ed25519 + contentHash | import as new immutable version / retire old |
 | Mapping set | `/changes` → `mapping_published` / `mapping_deprecated` (carries target) | `/mappings/{s}/{sv}/{t}/{tv}` | ed25519 + contentHash | import / retire by pair |
-| QA template | **poll** `qa-template?lang` per held version (no event) | console API | — (unsigned) | replace held template for that version/language |
-| Translation | **poll** `export?lang` / `qa-template?lang` after a translate job (no event) | console API | — (unsigned) | replace localized text |
+| QA template | `/changes` → `qa_published` | `/frameworks/{id}/versions/{v}/qa[?lang]` | — (unsigned; bundle vouches) | replace held template for that version/language |
+| Translation | `/changes` → `translation_published` | `/frameworks/{id}` (languages) → `seed?lang` / `qa?lang` | — (overlay) | replace localized text |
 
 ---
 
@@ -486,22 +507,24 @@ crash-safe cursor persistence (cursor saved only after a page is fully processed
 
 ---
 
-## 11. Gaps & roadmap (be explicit with integrators)
+## 11. Notes & remaining choices
 
-Today, a GRC gets **frameworks and cross-mappings** fully machine-to-machine,
-signed and cursor-synced. **Audit (QA) templates and translations are
-authoring-side and reachable only through the console API with user
-credentials.** To make them first-class distribution artifacts would mean:
+All four artifacts — frameworks, cross-mappings, audit templates, translations —
+are now machine-to-machine over `/api/registry/v1`, bearer-authed and
+cursor-synced. Two things are deliberately **not** signed, and integrators should
+know why:
 
-- **QA over distribution:** add `GET /api/registry/v1/frameworks/{id}/versions/{v}/qa[?lang]`
-  (bearer-authed, region/copyright-gated), and emit `qa_published` change events
-  when a template is marked `ready`. Sign the template like a bundle so a GRC can
-  verify it.
-- **Translations over distribution:** either add `?lang` to the bundle/seed
-  endpoints (applying the overlay server-side, canonical fallback) or ship a
-  per-language overlay artifact + `translation_published` events. Decide whether a
-  translation is signed (it changes display text but not structure/refs).
+- **The QA template and the translated seed are unsigned** (derived from live rows
+  at request time, like the canonical seed). A consumer that needs cryptographic
+  provenance verifies the framework **bundle** (which is signed and immutable) and
+  trusts the derived shapes because they belong to a verified version. Signing the
+  QA template on its own is a possible future step if a GRC requires it
+  independently of the framework.
+- **The bundle stays canonical-language.** Translating the signed bundle would
+  invalidate its signature, so localized text is delivered via `seed?lang` /
+  `qa?lang` overlays rather than a translated bundle. This keeps the signed
+  artifact stable and the localization a display concern.
 
-Until then, mirror QA and translations by polling the console API per held
-framework version, and treat frameworks + mappings as the source of truth for
-anything scored or cross-referenced.
+Everything scored or cross-referenced should still key off frameworks + mappings
+(the signed source of truth); QA and translations enrich them for a localized,
+audit-ready import.

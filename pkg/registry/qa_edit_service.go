@@ -97,7 +97,21 @@ func (s *Service) SetQATemplateStatus(ctx context.Context, actorID, templateID g
 		return fmt.Errorf("%w: unknown status %q", ErrInvalidInput, status)
 	}
 	return s.db.WithTx(ctx, func(ctx context.Context, tx pg.Tx) error {
-		return coredata.QATemplate{}.SetStatus(ctx, tx, s.platformScope(), templateID, status, time.Now())
+		scope := s.platformScope()
+		if err := (coredata.QATemplate{}).SetStatus(ctx, tx, scope, templateID, status, time.Now()); err != nil {
+			return err
+		}
+		// Marking a template ready makes it distributable; if its version is
+		// published, announce it on the change feed. Draft versions are skipped
+		// inside emitVersionArtifactEvent.
+		if status == coredata.QATemplateStatusReady {
+			var row coredata.QATemplate
+			if err := row.LoadTemplateByID(ctx, tx, scope, templateID); err != nil {
+				return err
+			}
+			return s.emitVersionArtifactEvent(ctx, tx, coredata.DistributionEventQAPublished, row.FrameworkVersionID)
+		}
+		return nil
 	})
 }
 

@@ -53,6 +53,27 @@ func (s *Service) emitDistributionEvent(ctx context.Context, tx pg.Tx, kind stri
 	return ev.Append(ctx, tx, framework.ID.TenantID())
 }
 
+// emitVersionArtifactEvent announces an artifact tied to a version (its audit
+// template or its translations) on the change feed — but only when the version is
+// PUBLISHED. A draft's QA/translations are authoring-side and not distributed;
+// once the version is published the artifact becomes fetchable, so the event lets
+// a consumer pull it without polling. No-op (nil) for an unpublished version.
+func (s *Service) emitVersionArtifactEvent(ctx context.Context, tx pg.Tx, kind string, versionID gid.GID) error {
+	scope := s.platformScope()
+	var version coredata.FrameworkVersion
+	if err := version.LoadByID(ctx, tx, scope, versionID); err != nil {
+		return err
+	}
+	if version.Status != coredata.FrameworkVersionStatusPublished {
+		return nil
+	}
+	var framework coredata.Framework
+	if err := framework.LoadByID(ctx, tx, scope, version.FrameworkID); err != nil {
+		return err
+	}
+	return s.emitDistributionEvent(ctx, tx, kind, framework, version, time.Now())
+}
+
 // Submit locks a DRAFT for review (DRAFT → IN_REVIEW). The draft must contain at
 // least one control and pass schema validation.
 func (s *Service) Submit(ctx context.Context, actorID, versionID gid.GID) error {
@@ -285,6 +306,15 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 		// is allowed to see it.
 		if err := s.emitDistributionEvent(ctx, tx, coredata.DistributionEventPublished, framework, version, publishedAt); err != nil {
 			return err
+		}
+
+		// If a reviewed audit template already exists for this version, announce it
+		// in the same commit so a consumer can pull it right after the framework.
+		var qa coredata.QATemplate
+		if err := qa.LoadTemplateByVersion(ctx, tx, scope, version.ID, ""); err == nil && qa.Status == coredata.QATemplateStatusReady {
+			if err := s.emitDistributionEvent(ctx, tx, coredata.DistributionEventQAPublished, framework, version, publishedAt); err != nil {
+				return err
+			}
 		}
 
 		return s.recordAudit(ctx, tx, scope, actorID, "version.publish", version.ID.String(),

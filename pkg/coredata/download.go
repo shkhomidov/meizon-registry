@@ -36,6 +36,7 @@ type Download struct {
 const (
 	DownloadFormatBundle = "bundle"
 	DownloadFormatSeed   = "seed"
+	DownloadFormatQA     = "qa"
 )
 
 func (d Download) Insert(ctx context.Context, conn pg.Querier, scope Scoper) error {

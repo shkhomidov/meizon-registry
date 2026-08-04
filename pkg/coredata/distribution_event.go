@@ -34,6 +34,11 @@ const (
 	DistributionEventDeprecated        = "deprecated"
 	DistributionEventMappingPublished  = "mapping_published"
 	DistributionEventMappingDeprecated = "mapping_deprecated"
+	// A published version's audit template became ready, or its translations
+	// changed. Both carry framework+version; the consumer re-fetches the QA
+	// template / the available languages for that version.
+	DistributionEventQAPublished          = "qa_published"
+	DistributionEventTranslationPublished = "translation_published"
 )
 
 // distributionSeqLockKey is the advisory-lock key guarding seq assignment. Any
