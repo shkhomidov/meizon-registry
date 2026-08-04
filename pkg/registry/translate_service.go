@@ -147,6 +147,8 @@ func (s *Service) StartTranslateJob(ctx context.Context, actorID gid.GID, ref, t
 	s.startJobRecord(ctx, job.id, coredata.JobKindTranslate, targetLang, ref, actorID)
 
 	go func() {
+		s.llmSem <- struct{}{}
+		defer func() { <-s.llmSem }()
 		ctx := context.Background()
 		err := s.runTranslate(ctx, job, client, setting, doc, versionID, targetLang)
 		if err == nil {

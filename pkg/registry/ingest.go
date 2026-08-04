@@ -474,6 +474,8 @@ func (s *Service) StartGenerateJob(ctx context.Context, actorID gid.GID, in DocI
 	s.startJobRecord(ctx, job.id, coredata.JobKindGenerate, in.Filename, "", actorID)
 
 	go func() {
+		s.llmSem <- struct{}{}
+		defer func() { <-s.llmSem }()
 		bg := context.Background()
 		docText, oerr := s.resolveText(bg, job, actorID, in)
 		if oerr != nil {
@@ -576,6 +578,8 @@ func (s *Service) StartNextVersionJob(ctx context.Context, actorID gid.GID, ref 
 	s.startJobRecord(ctx, job.id, coredata.JobKindGenerate, in.Filename, "", actorID)
 
 	go func() {
+		s.llmSem <- struct{}{}
+		defer func() { <-s.llmSem }()
 		bg := context.Background()
 		docText, oerr := s.resolveText(bg, job, actorID, in)
 		if oerr != nil {

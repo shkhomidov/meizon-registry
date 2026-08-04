@@ -153,6 +153,8 @@ func (s *Service) StartAutoMapJob(ctx context.Context, actorID gid.GID, req Auto
 	s.startJobRecord(ctx, job.id, coredata.JobKindAutoMap, req.TargetRef, req.SourceRef, actorID)
 
 	go func() {
+		s.llmSem <- struct{}{}
+		defer func() { <-s.llmSem }()
 		bg := context.Background()
 		err := s.runAutoMap(bg, job, client, setting, autoMapInput{
 			req:             req,
