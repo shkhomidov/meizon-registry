@@ -47,7 +47,12 @@ export default function IngestProgress({ status, steps = STEPS, caption = 'Struc
               <div className="flex-1 min-w-0">
                 <div className={`text-[13px] ${state === 'todo' ? 'text-muted' : 'text-text'}`}>
                   {s.label}
-                  {isCounted && (state === 'active' || state === 'done') && total > 0 && (
+                  {/* The counter belongs to the ACTIVE step only. There is a
+                      single job-wide progress value (whatever the current step is
+                      counting), so showing it on finished steps too made one
+                      number — e.g. "6/16" — bleed across OCR, Split and Extract
+                      at once. */}
+                  {isCounted && state === 'active' && total > 0 && (
                     <span className="text-muted font-mono text-[12px]"> · {Math.min(current, total)}/{total}{s.unit ? ` ${s.unit}` : ''}</span>
                   )}
                 </div>
