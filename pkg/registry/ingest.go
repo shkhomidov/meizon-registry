@@ -343,6 +343,7 @@ type IngestStatus struct {
 	Result   *GeneratedFramework `json:"result,omitempty"`
 	Diff     map[string]string   `json:"diff,omitempty"`            // next-version only
 	Baseline string              `json:"baselineVersion,omitempty"` // next-version only
+	Coverage *qaCoverageReport   `json:"coverage,omitempty"`        // qa_template only
 	Error    string              `json:"error,omitempty"`
 }
 

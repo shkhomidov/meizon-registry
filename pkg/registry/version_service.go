@@ -98,6 +98,8 @@ func (s *Service) AcceptNextVersion(ctx context.Context, actorID gid.GID, ref, n
 		// A new version replaces the content the old translation described, so
 		// the canonical record has to be rebuilt for it.
 		s.EnsureCanonicalTranslation(ctx, actorID, ref)
+		// Author the audit template for the new draft version too.
+		s.AutoStartQATemplate(ctx, actorID, ref, out.VersionID, flat)
 	}
 	return out, err
 }

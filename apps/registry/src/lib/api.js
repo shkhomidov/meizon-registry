@@ -133,6 +133,8 @@ export const api = {
     { method: 'DELETE' }),
   qaReorder: (templateId, order) => request(
     `/console/v1/qa-templates/${encodeURIComponent(templateId)}/reorder`, { method: 'POST', body: { order } }),
+  qaSetStatus: (templateId, status) => request(
+    `/console/v1/qa-templates/${encodeURIComponent(templateId)}/status`, { method: 'POST', body: { status } }),
   // jobId links the new framework to the source file staged when it was
   // uploaded, so the document stays with what was generated from it.
   acceptGenerated: (doc, jobId) => request(
