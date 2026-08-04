@@ -52,13 +52,13 @@ func (h *Handler) generateFramework(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		// A framework export round-trips directly; a plain control-list JSON is
-		// converted and imported 1:1. Either way we skip the model — an already
-		// structured list must not be re-derived (slow, costly, and lossy).
+		// A full framework export round-trips directly: it already carries
+		// categories, requirements AND controls, so re-deriving it through the
+		// model would be wasteful and could degrade it. Anything else — including
+		// a plain control-list JSON — is treated as source input and sent to the
+		// model, so it comes back enriched with generated requirements and
+		// controls (and, on accept, an audit template) rather than imported 1:1.
 		doc, structured := registry.DetectFrameworkJSON(filename, data)
-		if !structured {
-			doc, structured = registry.DetectControlListJSON(filename, data)
-		}
 		if structured {
 			jobID, err := h.svc.StartStructuredImportJob(r.Context(), actor, doc, filename)
 			if err != nil {

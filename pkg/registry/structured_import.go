@@ -66,117 +66,6 @@ func DetectFrameworkJSON(filename string, data []byte) (*fwflat.Framework, bool)
 	return &doc, true
 }
 
-// controlListDoc is a plain "list of controls" JSON: an id/name header and a flat
-// controls array of {id, name}. Public framework catalogues commonly export this
-// shape; it is NOT the meizon-framework/v2 export. Extra fields (logo, etc.) are
-// ignored.
-type controlListDoc struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Version  string `json:"version"`
-	Controls []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	} `json:"controls"`
-}
-
-// DetectControlListJSON recognizes a plain control-list JSON and converts it to a
-// flat framework, so a structured list is imported 1:1 rather than re-derived by
-// the model (slow, costly, and lossy — a chunked LLM pass can drop or rename
-// controls). It is strict: a .json upload, no meizon-framework/v2 marker (that is
-// DetectFrameworkJSON's job), and a non-empty controls array whose every entry
-// carries an id and a name. Anything else falls through to the generate pipeline.
-func DetectControlListJSON(filename string, data []byte) (*fwflat.Framework, bool) {
-	if !strings.HasSuffix(strings.ToLower(filename), ".json") {
-		return nil, false
-	}
-	if bytes.Contains(data, []byte(fwflat.SchemaMarker)) {
-		return nil, false // a framework export — handled by DetectFrameworkJSON
-	}
-	if !bytes.Contains(data, []byte(`"controls"`)) {
-		return nil, false
-	}
-	var cl controlListDoc
-	if err := json.Unmarshal(data, &cl); err != nil {
-		return nil, false
-	}
-	if len(cl.Controls) == 0 {
-		return nil, false
-	}
-	for _, c := range cl.Controls {
-		if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.Name) == "" {
-			return nil, false // not a clean id+name control list
-		}
-	}
-	return controlListToFlat(cl), true
-}
-
-// controlListToFlat maps a control list to a flat framework: each control becomes
-// a requirement (ref = control id), and its category is taken from the name
-// prefix ("Organizational - Access control" -> category "Organizational",
-// requirement "Access control"). Category refs are slugged and de-collided.
-func controlListToFlat(cl controlListDoc) *fwflat.Framework {
-	name := strings.TrimSpace(cl.Name)
-	if name == "" {
-		name = strings.TrimSpace(cl.ID)
-	}
-	seed := strings.TrimSpace(cl.ID)
-	if seed == "" {
-		seed = name
-	}
-	version := strings.TrimSpace(cl.Version)
-	if version == "" {
-		version = "1.0"
-	}
-
-	doc := &fwflat.Framework{
-		Schema:  fwflat.SchemaMarker,
-		ID:      slugify(seed),
-		Name:    name,
-		Version: version,
-	}
-
-	catRefByName := map[string]string{}
-	usedRef := map[string]bool{}
-	for _, c := range cl.Controls {
-		category, title := splitControlName(c.Name)
-		ref, ok := catRefByName[category]
-		if !ok {
-			base := slugify(category)
-			if base == "" {
-				base = "general"
-			}
-			ref = base
-			for n := 2; usedRef[ref]; n++ {
-				ref = fmt.Sprintf("%s-%d", base, n)
-			}
-			usedRef[ref] = true
-			catRefByName[category] = ref
-			doc.Categories = append(doc.Categories, fwflat.Category{Ref: ref, Name: category})
-		}
-		doc.Requirements = append(doc.Requirements, fwflat.Requirement{
-			Ref:      strings.TrimSpace(c.ID),
-			Category: ref,
-			Name:     title,
-		})
-	}
-	return doc
-}
-
-// splitControlName splits "Category - Title" on the first " - " separator. A name
-// with no separator is placed under a "General" category.
-func splitControlName(name string) (category, title string) {
-	name = strings.TrimSpace(name)
-	if i := strings.Index(name, " - "); i >= 0 {
-		cat := strings.TrimSpace(name[:i])
-		rest := strings.TrimSpace(name[i+3:])
-		if cat != "" && rest != "" {
-			return cat, rest
-		}
-	}
-	return "General", name
-}
-
 // StartStructuredImportJob accepts an already-structured framework as a finished
 // generation, with no model involved. It produces the same reviewable job a
 // generation would, so the console's review-and-accept flow is identical whether
@@ -207,7 +96,7 @@ func (s *Service) StartStructuredImportJob(ctx context.Context, actorID gid.GID,
 		Document:     doc,
 		Summary:      summarizeFlat(doc),
 		Provenance:   map[string]string{},
-		Note:         "Imported directly from a structured framework file; no AI generation was run.",
+		Note:         "This file was already structured, so no document extraction was needed. Review it below and click Accept to create the framework — audit questions are generated automatically once you accept.",
 		Warnings:     doc.Warnings(fwflat.ValidateOptions{}),
 		Duplicates:   doc.DuplicateDescriptions(),
 	}
