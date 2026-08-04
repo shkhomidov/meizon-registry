@@ -17,6 +17,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"go.gearno.de/kit/pg"
@@ -32,13 +33,14 @@ import (
 type QATemplateView struct {
 	TemplateID string `json:"templateId"`
 	Status     string `json:"status"`
+	Language   string `json:"language"` // "" = canonical
 	*fwqa.Template
 }
 
 // loadQATemplate loads the stored row and reconstructs the template for a
 // framework's latest version (draft or published). It is the shared core behind
 // the pure-template and console-view readers.
-func (s *Service) loadQATemplate(ctx context.Context, frameworkRef string) (*coredata.QATemplate, *fwqa.Template, error) {
+func (s *Service) loadQATemplate(ctx context.Context, frameworkRef, language string) (*coredata.QATemplate, *fwqa.Template, error) {
 	var outRow *coredata.QATemplate
 	var outTpl *fwqa.Template
 	err := s.db.WithConn(ctx, func(ctx context.Context, conn pg.Querier) error {
@@ -56,8 +58,14 @@ func (s *Service) loadQATemplate(ctx context.Context, frameworkRef string) (*cor
 			return err
 		}
 
+		// Serve the requested language, falling back to the canonical template
+		// when that language has not been translated yet.
 		var row coredata.QATemplate
-		if err := row.LoadTemplateByVersion(ctx, conn, scope, versionID); err != nil {
+		err = row.LoadTemplateByVersion(ctx, conn, scope, versionID, language)
+		if errors.Is(err, coredata.ErrResourceNotFound) && language != "" {
+			err = row.LoadTemplateByVersion(ctx, conn, scope, versionID, "")
+		}
+		if err != nil {
 			return err
 		}
 		var questions coredata.QAQuestions
@@ -75,22 +83,23 @@ func (s *Service) loadQATemplate(ctx context.Context, frameworkRef string) (*cor
 	return outRow, outTpl, err
 }
 
-// QATemplateFor reconstructs the stored audit template for a framework's latest
-// version into a fwqa.Template — the shape the preview runner consumes. Returns
-// ErrResourceNotFound if none has been generated.
+// QATemplateFor reconstructs the stored canonical audit template for a framework's
+// latest version into a fwqa.Template — the shape the preview runner consumes.
+// Returns ErrResourceNotFound if none has been generated.
 func (s *Service) QATemplateFor(ctx context.Context, frameworkRef string) (*fwqa.Template, error) {
-	_, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+	_, tpl, err := s.loadQATemplate(ctx, frameworkRef, "")
 	return tpl, err
 }
 
 // QATemplateViewFor is the console read: the template plus its DB GID and status,
-// so the editor can address questions and show the draft/ready state.
-func (s *Service) QATemplateViewFor(ctx context.Context, frameworkRef string) (*QATemplateView, error) {
-	row, tpl, err := s.loadQATemplate(ctx, frameworkRef)
+// in the requested language (falling back to canonical when untranslated), so the
+// editor can address questions and show the draft/ready state.
+func (s *Service) QATemplateViewFor(ctx context.Context, frameworkRef, language string) (*QATemplateView, error) {
+	row, tpl, err := s.loadQATemplate(ctx, frameworkRef, language)
 	if err != nil {
 		return nil, err
 	}
-	return &QATemplateView{TemplateID: row.ID.String(), Status: row.Status, Template: tpl}, nil
+	return &QATemplateView{TemplateID: row.ID.String(), Status: row.Status, Language: row.Language, Template: tpl}, nil
 }
 
 // QATemplateByID reconstructs a template by its id — used by the edit endpoints

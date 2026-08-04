@@ -44,7 +44,7 @@ func (h *Handler) qaGenerate(w http.ResponseWriter, r *http.Request) {
 
 // qaTemplate returns the assembled audit template for a framework.
 func (h *Handler) qaTemplate(w http.ResponseWriter, r *http.Request) {
-	tpl, err := h.svc.QATemplateViewFor(r.Context(), chi.URLParam(r, "ref"))
+	tpl, err := h.svc.QATemplateViewFor(r.Context(), chi.URLParam(r, "ref"), r.URL.Query().Get("lang"))
 	if err != nil {
 		httpx.ServiceError(w, err)
 		return

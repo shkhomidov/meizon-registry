@@ -149,6 +149,14 @@ func (s *Service) StartTranslateJob(ctx context.Context, actorID gid.GID, ref, t
 	go func() {
 		ctx := context.Background()
 		err := s.runTranslate(ctx, job, client, setting, doc, versionID, targetLang)
+		if err == nil {
+			// Translating a framework also translates its audit template into the
+			// same language. Best-effort: a QA failure must not fail the framework
+			// translation the job reports on.
+			if qerr := s.translateQATemplate(ctx, client, setting, ref, targetLang); qerr != nil {
+				s.logger.WarnCtx(ctx, "framework translated but its audit template did not: "+qerr.Error())
+			}
+		}
 		job.finish(nil, nil, "", err)
 		if err == nil {
 			s.auditTranslate(ctx, actorID, client, setting, ref, targetLang, len(collectNodes(doc)))
