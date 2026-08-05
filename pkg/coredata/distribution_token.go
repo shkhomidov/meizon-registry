@@ -139,9 +139,33 @@ func (t *DistributionToken) TouchLastUsed(ctx context.Context, conn pg.Querier, 
 	return err
 }
 
-// Revoke marks a token revoked.
+// Revoke marks a token revoked. A revoked token fails authentication
+// (LoadByHashedToken filters revoked = FALSE) but its row is kept, so its name
+// and last-used time stay visible for audit.
 func (t *DistributionToken) Revoke(ctx context.Context, conn pg.Tx, scope Scoper) error {
 	q := fmt.Sprintf(`UPDATE distribution_tokens SET revoked = TRUE WHERE %s AND id = @id;`, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"id": t.ID}
+	maps.Copy(args, scope.SQLArguments())
+	_, err := conn.Exec(ctx, q, args)
+	return err
+}
+
+// Reinstate clears the revoked flag, re-enabling a token that was inactivated.
+// The plaintext is unchanged — reinstating re-enables the same secret, so this
+// is only appropriate for a deliberate pause, not for a leaked credential
+// (delete and re-issue in that case).
+func (t *DistributionToken) Reinstate(ctx context.Context, conn pg.Tx, scope Scoper) error {
+	q := fmt.Sprintf(`UPDATE distribution_tokens SET revoked = FALSE WHERE %s AND id = @id;`, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"id": t.ID}
+	maps.Copy(args, scope.SQLArguments())
+	_, err := conn.Exec(ctx, q, args)
+	return err
+}
+
+// Delete removes a token row entirely. Unlike Revoke it leaves no audit trail of
+// the token itself; the audit log records who deleted it.
+func (t *DistributionToken) Delete(ctx context.Context, conn pg.Tx, scope Scoper) error {
+	q := fmt.Sprintf(`DELETE FROM distribution_tokens WHERE %s AND id = @id;`, scope.SQLFragment())
 	args := pgx.StrictNamedArgs{"id": t.ID}
 	maps.Copy(args, scope.SQLArguments())
 	_, err := conn.Exec(ctx, q, args)

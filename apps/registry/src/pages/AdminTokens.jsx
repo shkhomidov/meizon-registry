@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Ticket, Plus, Copy } from 'lucide-react'
+import { Ticket, Plus, Copy, Ban, RotateCcw, Trash2 } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { RegionMultiSelect } from '../components/RegionSelect.jsx'
 import {
@@ -10,11 +10,30 @@ export default function AdminTokens() {
   const [tokens, setTokens] = useState(null)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [deleting, setDeleting] = useState(null)
+  const [busyId, setBusyId] = useState('')
 
   async function load() {
     try { setTokens(await api.adminTokens()) } catch (e) { setError(e.message) }
   }
   useEffect(() => { load() }, [])
+
+  // toggle inactivates an active token or reactivates an inactive one. Both are
+  // one call plus a reload, so they share a path; the row disables while it runs.
+  async function toggle(t) {
+    setError(''); setBusyId(t.id)
+    try {
+      await (t.revoked ? api.adminReinstateToken(t.id) : api.adminRevokeToken(t.id))
+      await load()
+    } catch (e) { setError(e.message) } finally { setBusyId('') }
+  }
+
+  async function confirmDelete() {
+    const t = deleting
+    setError(''); setBusyId(t.id)
+    try { await api.adminDeleteToken(t.id); await load() }
+    catch (e) { setError(e.message) } finally { setBusyId(''); setDeleting(null) }
+  }
 
   return (
     <Page
@@ -28,15 +47,35 @@ export default function AdminTokens() {
           <EmptyState icon={Ticket} title="No tokens" hint="Issue a token to let a GRC instance sync." />
         ) : (
           <Table>
-            <THead><TR><TH>Name</TH><TH>Regions</TH><TH>Status</TH><TH>Created</TH><TH>Last used</TH></TR></THead>
+            <THead><TR><TH>Name</TH><TH>Regions</TH><TH>Status</TH><TH>Created</TH><TH>Last used</TH><TH> </TH></TR></THead>
             <tbody>
               {tokens?.map((t) => (
                 <TR key={t.id}>
                   <TD className="text-text">{t.name}</TD>
                   <TD className="text-muted">{t.regions?.join(', ') || 'all'}</TD>
-                  <TD>{t.revoked ? <Badge tone="red">revoked</Badge> : <Badge tone="green">active</Badge>}</TD>
+                  <TD>{t.revoked ? <Badge tone="red">inactive</Badge> : <Badge tone="green">active</Badge>}</TD>
                   <TD className="text-muted">{new Date(t.createdAt).toLocaleString()}</TD>
                   <TD className="text-muted">{t.lastUsedAt ? new Date(t.lastUsedAt).toLocaleString() : '—'}</TD>
+                  <TD>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <Button
+                        variant="ghost" size="sm"
+                        icon={t.revoked ? RotateCcw : Ban}
+                        busy={busyId === t.id}
+                        onClick={() => toggle(t)}
+                      >
+                        {t.revoked ? 'Reactivate' : 'Inactivate'}
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm" icon={Trash2}
+                        disabled={busyId === t.id}
+                        onClick={() => setDeleting(t)}
+                        className="text-st-red hover:bg-st-red/10"
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </TD>
                 </TR>
               ))}
             </tbody>
@@ -45,6 +84,21 @@ export default function AdminTokens() {
       </Card>
 
       {creating && <TokenDialog onClose={() => setCreating(false)} onDone={() => { setCreating(false); load() }} />}
+      {deleting && (
+        <Dialog title="Delete token" onClose={() => setDeleting(null)}
+          footer={<>
+            <Button variant="ghost" onClick={() => setDeleting(null)}>Cancel</Button>
+            <Button variant="danger" busy={busyId === deleting.id} onClick={confirmDelete}>Delete permanently</Button>
+          </>}>
+          <div className="text-[13px] text-text">
+            Delete <span className="font-medium">{deleting.name}</span>? The credential stops working immediately and
+            cannot be recovered. A GRC instance still using it must be re-issued a new token.
+          </div>
+          <div className="text-[12px] text-muted mt-2">
+            To pause an instance without losing the token, use <span className="font-medium">Inactivate</span> instead.
+          </div>
+        </Dialog>
+      )}
     </Page>
   )
 }
