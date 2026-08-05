@@ -13,18 +13,32 @@ function pinnedForm(k) {
 }
 
 // CopyButton copies text to the clipboard and briefly confirms, so an operator
-// gets feedback instead of wondering whether the click registered.
-function CopyButton({ text, title = 'Copy', className = '' }) {
+// gets feedback instead of wondering whether the click registered. With a label
+// it renders as a labelled button ("Copy key" → "Copied"); without one it is a
+// compact icon for inline use next to a value.
+function CopyButton({ text, title = 'Copy', label, className = '' }) {
   const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
+
+  if (label) {
+    return (
+      <button
+        type="button" title={title} onClick={copy}
+        className={`inline-flex items-center gap-1.5 rounded-btn border border-border px-2.5 py-1.5 text-[12px] font-medium text-text hover:bg-surface ${className}`}
+      >
+        {copied ? <Check size={14} className="text-sage" /> : <Copy size={14} />}
+        {copied ? 'Copied' : label}
+      </button>
+    )
+  }
+
   return (
     <button
-      type="button"
-      title={title}
-      onClick={() => {
-        navigator.clipboard?.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
-      }}
+      type="button" title={title} onClick={copy}
       className={`text-muted hover:text-sage shrink-0 ${className}`}
     >
       {copied ? <Check size={15} className="text-sage" /> : <Copy size={15} />}
@@ -62,13 +76,15 @@ export default function AdminKeys() {
                   <TD className="font-mono text-[12px] text-text">{k.keyId}</TD>
                   <TD>{k.active ? <Badge tone="green">active</Badge> : <Badge tone="grey">rotated</Badge>}</TD>
                   <TD>
-                    <div className="flex items-center gap-2 max-w-[300px]">
-                      <span className="font-mono text-[11px] text-muted truncate">{k.publicKey}</span>
-                      <CopyButton text={pinnedForm(k)} title="Copy keyId:base64 (pin form)" />
-                    </div>
+                    <div className="font-mono text-[11px] text-muted truncate max-w-[300px]">{k.publicKey}</div>
                   </TD>
                   <TD className="text-muted">{new Date(k.createdAt).toLocaleString()}</TD>
-                  <TD><Button variant="ghost" size="sm" onClick={() => setViewing(k)}>View</Button></TD>
+                  <TD>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <CopyButton text={pinnedForm(k)} label="Copy key" title="Copy keyId:base64 (pin form)" />
+                      <Button variant="ghost" size="sm" onClick={() => setViewing(k)}>View</Button>
+                    </div>
+                  </TD>
                 </TR>
               ))}
             </tbody>
