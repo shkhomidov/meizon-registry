@@ -600,6 +600,19 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 		scope := s.platformScope()
 		now := time.Now()
 
+		// An audit generated for an already-published framework is ready at once:
+		// the version is public, so there is nothing left to gate the audit behind
+		// — it distributes without a separate "mark ready". A draft version keeps
+		// the caller's status (draft) until it is published.
+		effectiveStatus := status
+		var version coredata.FrameworkVersion
+		if err := version.LoadByID(ctx, tx, scope, versionID); err != nil {
+			return err
+		}
+		if version.Status == coredata.FrameworkVersionStatusPublished {
+			effectiveStatus = coredata.QATemplateStatusReady
+		}
+
 		scaleJSON, _ := json.Marshal(tpl.Scale)
 		vmJSON, _ := json.Marshal(tpl.VerdictModel)
 
@@ -609,7 +622,7 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 			FrameworkRef:       tpl.Framework.ID,
 			Language:           language,
 			Title:              tpl.Title,
-			Status:             status,
+			Status:             effectiveStatus,
 			GeneratedBy:        tpl.GeneratedBy,
 			Model:              tpl.Model,
 			Scale:              scaleJSON,
@@ -623,7 +636,16 @@ func (s *Service) persistQATemplate(ctx context.Context, versionID gid.GID, tpl 
 		templateID = row.ID
 
 		questions := qaQuestionRows(row.ID, s.cfg.PlatformTenant, tpl, now)
-		return coredata.QATemplate{}.ReplaceQuestions(ctx, tx, scope, row.ID, questions)
+		if err := (coredata.QATemplate{}).ReplaceQuestions(ctx, tx, scope, row.ID, questions); err != nil {
+			return err
+		}
+
+		// Announce a ready audit so a consumer can pull it; no-op for a draft
+		// version (emitVersionArtifactEvent checks the version is published).
+		if effectiveStatus == coredata.QATemplateStatusReady {
+			return s.emitVersionArtifactEvent(ctx, tx, coredata.DistributionEventQAPublished, versionID)
+		}
+		return nil
 	})
 	return templateID, err
 }

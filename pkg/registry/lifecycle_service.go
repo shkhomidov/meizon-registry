@@ -317,10 +317,16 @@ func (s *Service) Publish(ctx context.Context, actorID, versionID gid.GID) error
 			return err
 		}
 
-		// If a reviewed audit template already exists for this version, announce it
-		// in the same commit so a consumer can pull it right after the framework.
-		var qa coredata.QATemplate
-		if err := qa.LoadTemplateByVersion(ctx, tx, scope, version.ID, ""); err == nil && qa.Status == coredata.QATemplateStatusReady {
+		// Publishing a framework distributes its audit too. Any audit template on
+		// this version — canonical and every translation — is marked ready in the
+		// same commit, so an operator does not have to confirm "ready" separately
+		// after already deciding to publish. If at least one existed, announce it
+		// so a consumer can pull it right after the framework.
+		readied, err := (coredata.QATemplate{}).SetStatusByVersion(ctx, tx, scope, version.ID, coredata.QATemplateStatusReady, publishedAt)
+		if err != nil {
+			return err
+		}
+		if readied > 0 {
 			if err := s.emitDistributionEvent(ctx, tx, coredata.DistributionEventQAPublished, framework, version, publishedAt); err != nil {
 				return err
 			}

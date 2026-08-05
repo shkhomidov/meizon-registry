@@ -165,6 +165,22 @@ func (t QATemplate) SetStatus(ctx context.Context, conn pg.Tx, scope Scoper, id 
 	return err
 }
 
+// SetStatusByVersion sets the status of every audit template on a version — all
+// languages at once — and returns how many templates it touched. Used when a
+// framework is published to mark its audit ready in the same commit; the count
+// is the number of audit templates on the version, so a non-zero result tells
+// the caller there is an audit to announce (whether or not the status changed).
+func (t QATemplate) SetStatusByVersion(ctx context.Context, conn pg.Tx, scope Scoper, versionID gid.GID, status string, now time.Time) (int64, error) {
+	q := fmt.Sprintf(`UPDATE qa_templates SET status = @status, updated_at = @now WHERE %s AND framework_version_id = @vid;`, scope.SQLFragment())
+	args := pgx.StrictNamedArgs{"vid": versionID, "status": status, "now": now}
+	maps.Copy(args, scope.SQLArguments())
+	tag, err := conn.Exec(ctx, q, args)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ReplaceQuestions swaps all of a template's questions for a new set in one
 // transaction — the regeneration path. Deleting then inserting under the same
 // tx means a reader never sees a half-replaced template.
