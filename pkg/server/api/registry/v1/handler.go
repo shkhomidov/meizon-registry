@@ -18,9 +18,11 @@
 package registry_v1
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -46,6 +48,13 @@ func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(authn.NewBearerTokenMiddleware(h.svc))
 
+	// The public signing keys, so a consumer can discover what to verify against
+	// with the distribution token it already has — no superadmin console or DB
+	// access needed. Public keys are public; this only saves them being locked
+	// away. A consumer that pins keys out of band (the air-gapped / zero-trust
+	// case) simply ignores this.
+	r.Get("/keys", h.keys)
+
 	r.Get("/catalog", h.catalog)
 	r.Head("/catalog", h.catalog)
 	r.Get("/changes", h.changes)
@@ -62,6 +71,39 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/mappings/{source}/{sourceVersion}/{target}/{targetVersion}", h.mappingSet)
 
 	return r
+}
+
+// keys serves the registry's public signing keys, so a consumer can fetch what
+// it verifies bundles against instead of extracting it from the superadmin
+// console or the database. The `pinned` form (keyId:base64) is exactly what
+// registryctl --pubkey and the sync client's pinned-keys config accept, so a
+// value here can be pasted straight in.
+func (h *Handler) keys(w http.ResponseWriter, r *http.Request) {
+	if _, ok := authn.TokenContextFrom(r.Context()); !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	keys, err := h.svc.VerificationKeys(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot load keys")
+		return
+	}
+
+	type keyView struct {
+		KeyID     string `json:"keyId"`
+		Algorithm string `json:"algorithm"`
+		PublicKey string `json:"publicKey"` // base64 (std) of the raw ed25519 key
+		Pinned    string `json:"pinned"`    // keyId:base64 — paste into pinned-keys
+	}
+	out := make([]keyView, 0, len(keys))
+	for id, pub := range keys {
+		b64 := base64.StdEncoding.EncodeToString(pub)
+		out = append(out, keyView{KeyID: id, Algorithm: "ed25519", PublicKey: b64, Pinned: id + ":" + b64})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].KeyID < out[j].KeyID })
+
+	writeJSON(w, r, http.StatusOK, out)
 }
 
 func (h *Handler) catalog(w http.ResponseWriter, r *http.Request) {
