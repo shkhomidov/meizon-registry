@@ -43,29 +43,14 @@ const maxUploadBytes = 128 << 20 // 128 MiB
 func (h *Handler) generateFramework(w http.ResponseWriter, r *http.Request) {
 	actor, _ := authn.IdentityFrom(r.Context())
 
-	// A multipart upload is read exactly once, then routed on the bytes in hand:
-	// a framework JSON export is imported as authored (no model), everything else
-	// goes through generation. Detecting the export before generation means an
-	// arbitrary (non-framework) JSON still falls through to the model.
+	// Every upload goes through the model — including a structured framework
+	// JSON. Its text is extracted and regenerated so the requirements, controls
+	// and (on accept) the audit template are always model-authored, never
+	// imported verbatim. A JSON file is read as source text like any other
+	// document.
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
 		filename, data, brief, _, ok := readMultipartDocument(w, r)
 		if !ok {
-			return
-		}
-		// A full framework export round-trips directly: it already carries
-		// categories, requirements AND controls, so re-deriving it through the
-		// model would be wasteful and could degrade it. Anything else — including
-		// a plain control-list JSON — is treated as source input and sent to the
-		// model, so it comes back enriched with generated requirements and
-		// controls (and, on accept, an audit template) rather than imported 1:1.
-		doc, structured := registry.DetectFrameworkJSON(filename, data)
-		if structured {
-			jobID, err := h.svc.StartStructuredImportJob(r.Context(), actor, doc, filename)
-			if err != nil {
-				httpx.ServiceError(w, err)
-				return
-			}
-			httpx.JSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "pages": 0, "ocrPages": 0})
 			return
 		}
 		prepared, err := h.svc.PrepareDocument(r.Context(), filename, data)
