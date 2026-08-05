@@ -170,3 +170,99 @@ func TestQAAndTranslationDistribution(t *testing.T) {
 		t.Fatal("no published versions")
 	}
 }
+
+// TestPublishAutoReadiesQATemplate pins the rule that publishing a framework
+// distributes its audit with no separate "mark ready": a draft audit template
+// on the version becomes ready in the publish commit and is immediately
+// fetchable over the distribution API.
+func TestPublishAutoReadiesQATemplate(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	fake := qaTranslateFake()
+	svc.SetLLMFactory(func(cfg llm.Config) (llm.Client, error) { return fake, nil })
+
+	if _, err := svc.BootstrapSuperAdmin(ctx, req(superAdminEmail, "Root")); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	super := mustID(t, svc, superAdminEmail)
+	if err := svc.SetLLMSettings(ctx, super, registry.SetLLMSettingsRequest{Provider: "openai", APIKey: "sk-test", Model: "gpt-4o"}); err != nil {
+		t.Fatalf("llm settings: %v", err)
+	}
+	mustCreateUser(t, svc, super, "auto-auditor@meizon.test", "Auditor", "auditor", []string{"EU"})
+	mustCreateUser(t, svc, super, "auto-mod@meizon.test", "Mod", "moderator", []string{"EU"})
+	auditor := mustID(t, svc, "auto-auditor@meizon.test")
+	mod := mustID(t, svc, "auto-mod@meizon.test")
+	if err := svc.GenerateSigningKey(ctx, super, "reg-2026"); err != nil {
+		t.Fatalf("signing key: %v", err)
+	}
+
+	created, err := svc.CreateFramework(ctx, auditor, registry.CreateFrameworkRequest{
+		ReferenceID: "auto-iso", Name: "Auto ISO", Region: "EU", License: "public-domain",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.AddCategory(ctx, auditor, created.VersionID, "A.5", "Organizational", "", ""); err != nil {
+		t.Fatalf("add category: %v", err)
+	}
+	if err := svc.AddRequirement(ctx, auditor, created.VersionID, "A.5", "A.5.1", "", "Policies", "Define policies.", "", "", "manual"); err != nil {
+		t.Fatalf("add requirement: %v", err)
+	}
+	addControl(t, svc, auditor, "auto-iso", "A.5.1", "Policies")
+
+	// Generate the audit template — but DO NOT mark it ready. That is the step
+	// this change removes.
+	qjob, err := svc.StartQATemplateJob(ctx, auditor, "auto-iso")
+	if err != nil {
+		t.Fatalf("qa job: %v", err)
+	}
+	if st := waitForJob(t, svc, qjob); st.Status != "done" {
+		t.Fatalf("qa job %s: %s", st.Status, st.Error)
+	}
+
+	before, err := svc.QATemplateViewFor(ctx, "auto-iso", "")
+	if err != nil {
+		t.Fatalf("load view: %v", err)
+	}
+	if before.Status != "draft" {
+		t.Fatalf("a freshly generated template on a draft version must be draft, got %q", before.Status)
+	}
+
+	// Publish (separation of duties: moderator, not the author). No mark-ready.
+	if err := svc.Submit(ctx, auditor, created.VersionID); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if err := svc.Approve(ctx, mod, created.VersionID, "ok"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := svc.Publish(ctx, mod, created.VersionID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Publishing readied the audit automatically.
+	after, err := svc.QATemplateViewFor(ctx, "auto-iso", "")
+	if err != nil {
+		t.Fatalf("load view after: %v", err)
+	}
+	if after.Status != "ready" {
+		t.Fatalf("publishing must ready the audit template, got %q", after.Status)
+	}
+
+	// And it distributes right away.
+	token, err := svc.IssueToken(ctx, super, "grc-eu", []string{"EU"})
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	tc, err := svc.AuthenticateToken(ctx, token)
+	if err != nil {
+		t.Fatalf("auth token: %v", err)
+	}
+	dtpl, err := svc.QATemplateDistribution(ctx, tc, "auto-iso", "latest", "")
+	if err != nil {
+		t.Fatalf("distribute qa: %v", err)
+	}
+	if len(dtpl.AllQuestions()) == 0 {
+		t.Fatal("distributed QA template has no questions")
+	}
+}
