@@ -137,6 +137,9 @@ func (h *Handler) Routes() http.Handler {
 		ar.Post("/keys", h.generateKey)
 		ar.Get("/tokens", h.listTokens)
 		ar.Post("/tokens", h.issueToken)
+		ar.Post("/tokens/{id}/revoke", h.revokeToken)
+		ar.Post("/tokens/{id}/reinstate", h.reinstateToken)
+		ar.Delete("/tokens/{id}", h.deleteToken)
 		// Organizations: the keyless-sync review queue. Approving an org lets it
 		// sync every published public framework instantly, with no token issued.
 		ar.Get("/organizations", h.listOrganizations)
@@ -315,6 +318,34 @@ func (h *Handler) issueToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, map[string]string{"token": token})
+}
+
+// tokenAction is the shared body of the revoke/reinstate/delete handlers: parse
+// the actor and the {id} path param, run the service action, answer 204.
+func (h *Handler) tokenAction(w http.ResponseWriter, r *http.Request, action func(context.Context, gid.GID, gid.GID) error) {
+	actor, _ := authn.IdentityFrom(r.Context())
+	id, err := gid.ParseGID(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid token id")
+		return
+	}
+	if err := action(r.Context(), actor, id); err != nil {
+		httpx.ServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) revokeToken(w http.ResponseWriter, r *http.Request) {
+	h.tokenAction(w, r, h.svc.RevokeToken)
+}
+
+func (h *Handler) reinstateToken(w http.ResponseWriter, r *http.Request) {
+	h.tokenAction(w, r, h.svc.ReinstateToken)
+}
+
+func (h *Handler) deleteToken(w http.ResponseWriter, r *http.Request) {
+	h.tokenAction(w, r, h.svc.DeleteToken)
 }
 
 func requireSession(next http.Handler) http.Handler {
