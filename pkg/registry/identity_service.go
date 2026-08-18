@@ -111,6 +111,22 @@ func (s *Service) BootstrapSuperAdmin(ctx context.Context, req CreateIdentityReq
 			}
 		case err != nil:
 			return err
+		default:
+			// The identity already exists, so re-running bootstrap RESETS its
+			// password. This is the supported recovery for a forgotten superadmin
+			// password — gated by the same env allowlist, so only an allowlisted
+			// email can do it, and it needs shell access to the server anyway.
+			if strings.TrimSpace(req.Password) != "" {
+				hashed, herr := s.hashPassword(req.Password)
+				if herr != nil {
+					return herr
+				}
+				identity.HashedPassword = hashed
+				identity.UpdatedAt = time.Now()
+				if err := identity.Update(ctx, tx, s.platformScope()); err != nil {
+					return fmt.Errorf("cannot reset password: %w", err)
+				}
+			}
 		}
 
 		id = identity.ID
