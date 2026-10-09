@@ -38,10 +38,16 @@ import (
 // ProviderMistral is the only implemented provider.
 const ProviderMistral = "mistral"
 
-// DefaultModel is pinned, not "-latest", on purpose: a silent model revision
-// could change page segmentation, and page alignment is load-bearing — the
-// reviewer's "jump to the page this came from" reads these page breaks.
-const DefaultModel = "mistral-ocr-2505"
+// DefaultModel tracks the "-latest" alias on purpose. A pinned snapshot looks
+// safer — a silent model revision could change page segmentation, and page
+// alignment is load-bearing (the reviewer's "jump to the page this came from"
+// reads these page breaks) — but Mistral retires pinned OCR snapshots on a few
+// months' notice (mistral-ocr-2505 was retired 2026-05-31), and a retired pin
+// fails every scanned-PDF ingest with a 400 "Invalid model". Resilience beats
+// the segmentation-stability concern here, so we follow the alias and record
+// the resolved model on each run (see the Result.Model note below) to keep a
+// silent revision visible.
+const DefaultModel = "mistral-ocr-latest"
 
 const defaultBaseURL = "https://api.mistral.ai"
 
