@@ -27,6 +27,19 @@ import (
 // Config aggregates everything the HTTP layer needs.
 type Config struct {
 	API api.Config
+
+	// ConsoleBasePath is the path prefix the console is served under, with a
+	// leading and no trailing slash -- "/registry" -- or empty for the root.
+	//
+	// # WHY THIS IS DERIVED FROM BaseURL RATHER THAN CONFIGURED SEPARATELY
+	//
+	// The deployment already has to state where it lives, because BaseURL is
+	// what the console's own sign-in redirects and absolute links are built
+	// from. A second setting for the same fact is a second thing to get wrong,
+	// and the failure when they disagree is subtle: the assets load from one
+	// prefix and the router expects another, so the page renders blank with no
+	// error anywhere.
+	ConsoleBasePath string
 }
 
 // NewHandler builds the outer router.
@@ -49,7 +62,28 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if console.Built() {
 		// Console and API share an origin, so the session cookie needs no
 		// cross-site relaxation and CORS is unnecessary.
-		root.Mount("/", console.Handler())
+		if base := cfg.ConsoleBasePath; base != "" {
+			// StripPrefix because the embedded file server looks up paths
+			// relative to dist/: a request for /registry/assets/index.js has
+			// to reach it as /assets/index.js or every asset 404s while the
+			// HTML loads fine, which looks like a broken build rather than a
+			// routing mistake.
+			root.Mount(base, http.StripPrefix(base, console.Handler()))
+
+			// A bare /registry, with no trailing slash, would otherwise miss
+			// the mount entirely and fall through to the root handler below.
+			root.Get(base, http.RedirectHandler(base+"/", http.StatusMovedPermanently).ServeHTTP)
+
+			// The root still answers, because something sharing this host may
+			// probe it and because a blank 404 at / is indistinguishable from
+			// a dead service.
+			root.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("meizon registry: console at " + base + "/\n"))
+			})
+		} else {
+			root.Mount("/", console.Handler())
+		}
 	} else {
 		root.Get("/", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)

@@ -21,6 +21,8 @@ package registryd
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -112,6 +114,7 @@ func (impl *Implm) Run(parentCtx context.Context, l *log.Logger, r prometheus.Re
 			CookieSecure:   impl.cfg.API.CookieSecure,
 			CorsOrigins:    impl.cfg.API.ConsoleOrigins,
 		},
+		ConsoleBasePath: consoleBasePath(impl.cfg.BaseURL),
 	})
 	if err != nil {
 		return fmt.Errorf("cannot build HTTP handler: %w", err)
@@ -145,4 +148,36 @@ func (impl *Implm) Run(parentCtx context.Context, l *log.Logger, r prometheus.Re
 	case err := <-errCh:
 		return fmt.Errorf("http server failed: %w", err)
 	}
+}
+
+// consoleBasePath extracts the path prefix the console is served under from
+// the configured base URL.
+//
+// "https://app.meizon.io/registry" -> "/registry"
+// "https://framework.meizon.io"    -> ""        (root, the standalone shape)
+// "http://localhost:8080/"         -> ""
+//
+// A malformed URL yields the root rather than an error. That is deliberate:
+// this decides where a UI is mounted, and refusing to start over a cosmetic
+// setting would take distribution down with it -- and distribution is what
+// the GRC server and every desktop depend on.
+func consoleBasePath(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	// A SCHEME AND HOST ARE REQUIRED, and that check is the difference between
+	// this function doing what the comment says and merely appearing to.
+	//
+	// url.Parse is forgiving: it accepts "not a url" without error and reports
+	// Path as "not a url". The first version of this trimmed and prefixed that
+	// into "/not a url" and mounted the console there -- unreachable, with the
+	// comment above still claiming it fell back to the root. Caught by a test
+	// whose own expectation was also wrong, which is how it got looked at
+	// twice.
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	p := strings.TrimRight(u.Path, "/")
+	if p == "" || !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	return p
 }

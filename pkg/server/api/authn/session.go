@@ -23,7 +23,19 @@ import (
 	"go.meizon.cloud/registry/pkg/securecookie"
 )
 
-const sessionCookieName = "mz_session"
+// THE NAME IS DISTINCT BECAUSE THE HOST IS SHARED.
+//
+// On app.meizon.io the console sits beside an unrelated Next.js admin app and
+// the control-plane API, all on one origin. A cookie named "mz_session" is a
+// name any of them might plausibly use, and the browser does not keep them
+// apart: same host, same Path=/, last writer wins. The failure is not an
+// error -- it is one app silently signing the other's user out, intermittently,
+// in a way that looks like a flaky session.
+//
+// Renaming invalidates existing console sessions once, at deploy. That is a
+// single re-sign-in for three identities, which is the cheapest moment this
+// will ever cost.
+const sessionCookieName = "mzreg_session"
 const sessionTTL = 12 * time.Hour
 
 type identityCtxKey int
